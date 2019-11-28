@@ -100,6 +100,24 @@ def plot_difference_map(hdu, file_prefix, vmax):
 
     plt.close()
 
+
+def output_plot(mp, title, imagename):
+    mp.write('\n<h2>{}</h2>\n<br/>'.format(title))
+    mp.write('\n<a href="{}"><img width="800px" src="{}"></a>'.format(imagename, imagename))
+    mp.write('\n<br/>\n')
+
+
+def output_map_page(filename, file_prefix, title):
+    with open(filename, 'w') as mp:
+        mp.write('<html>\n<head><title>{}</title>\n</head>'.format(title))
+        mp.write('\n<body>\n<h1>{}</h1>'.format(title))
+
+        output_plot(mp, 'Large Scale Emission Map', file_prefix + '_bkg.png')
+        output_plot(mp, 'Noise Map', file_prefix + '_rms.png')
+        output_plot(mp, 'Moment 0 Map', file_prefix + '.png')
+        mp.write('\n</body>\n</html>\n')
+
+
 def extract_slab(filename, vel_start, vel_end):
     cube = SpectralCube.read(filename)
     vel_cube = cube.with_spectral_unit(u.m/u.s, velocity_convention='radio')
@@ -120,7 +138,8 @@ def extract_slab(filename, vel_start, vel_end):
     return slab
 
 def build_fname(example_name, suffix):
-    prefix = os.path.splitext(example_name)[0]
+    basename = os.path.basename(example_name)
+    prefix = os.path.splitext(basename)[0]
     fname = prefix + suffix
     return fname
 
@@ -136,6 +155,7 @@ def get_bane_background(infile, outfile_prefix, ncores=8, redo=False):
     
     plot_map(background_prefix)
     plot_histogram(background_prefix, 'Emission (Jy beam^{-1} km s^{-1})')
+    plot_map(outfile_prefix+'_rms')
 
 
 def assess_metric(metric, threshold1, threshold2, low_good=False):
@@ -163,14 +183,18 @@ def check_for_emission(cube, vel_start, vel_end, reporter, dest_folder, ncores=8
 
     # Produce the background plots
     bkg_data = get_bane_background(mom0_fname, folder+prefix, ncores=ncores, redo=redo)
+    map_page = folder + '/emission.html'
+    rel_map_page = get_figures_folder('.') + '/emission.html'
+    output_map_page(map_page, prefix, 'Emission Plots')
+
     hi_data = fits.open(folder + prefix+'_bkg.fits')
     max_em = np.nanmax(hi_data[0].data)
 
     # assess
     cube_name = os.path.basename(cube)
-    section = ReportSection('Presence of emission', cube_name)
+    section = ReportSection('Presence of Emission', cube_name)
     section.add_item('Velocity Range<br/>(km/s LSR)', value='{:.0f} to {:.0f}'.format(vel_start.value, vel_end.value))
-    section.add_item('Large Scale<br/>Emission Map', link='figures/'+prefix+'_bkg.png', image='figures/'+prefix+'_bkg_sml.png')
+    section.add_item('Large Scale<br/>Emission Map', link=rel_map_page, image='figures/'+prefix+'_bkg_sml.png')
     section.add_item('Emission Histogram', link='figures/'+prefix+'_bkg_hist.png', image='figures/'+prefix+'_bkg_hist_sml.png')
     section.add_item('Max Emission<br/>(Jy km s<sup>-1</sup> beam<sup>-1</sup>)', value='{:.3f}'.format(max_em))
     reporter.add_section(section)
@@ -198,6 +222,10 @@ def check_for_non_emission(cube, vel_start, vel_end, reporter, dest_folder, ncor
 
     # Produce the background plots
     bkg_data = get_bane_background(mom0_fname, folder+prefix, ncores=ncores, redo=redo)
+    map_page = folder + '/off_emission.html'
+    rel_map_page = get_figures_folder('.') + '/off_emission.html'
+    output_map_page(map_page, prefix, 'Off-line Emission Plots')
+
     hi_data = fits.open(folder+prefix+'_bkg.fits')
     max_em = np.nanmax(hi_data[0].data)
 
@@ -205,7 +233,7 @@ def check_for_non_emission(cube, vel_start, vel_end, reporter, dest_folder, ncor
     cube_name = os.path.basename(cube)
     section = ReportSection('Absence of Off-line Emission', cube_name)
     section.add_item('Velocity Range<br/>(km/s LSR)', value='{:.0f} to {:.0f}'.format(vel_start.value, vel_end.value))
-    section.add_item('Large Scale<br/>Emission Map', link='figures/'+prefix+'_bkg.png', image='figures/'+prefix+'_bkg_sml.png')
+    section.add_item('Large Scale<br/>Emission Map', link=rel_map_page, image='figures/'+prefix+'_bkg_sml.png')
     section.add_item('Emission Histogram', link='figures/'+prefix+'_bkg_hist.png', image='figures/'+prefix+'_bkg_hist_sml.png')
     section.add_item('Max Emission<br/>(Jy km s<sup>-1</sup> beam<sup>-1</sup>)', value='{:.3f}'.format(max_em))
     reporter.add_section(section)
