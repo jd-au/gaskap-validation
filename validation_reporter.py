@@ -4,6 +4,9 @@
 # Author James Dempsey
 # Date 23 Nov 2019
 
+from astropy.table import Table
+from astropy.io.votable import from_table, writeto
+
 class ReportSection(object):
     def __init__(self, title, target):
         self.title = title
@@ -116,4 +119,20 @@ def output_html_report(reporter, dest_folder):
 
 
 def output_metrics_xml(reporter, dest_folder):
+    titles = []
+    descs = []
+    values = []
+    statuses = []
+
+    for metric in reporter.metrics:
+        # title, description, value, status
+        titles.append(metric.title)
+        descs.append(metric.description)
+        values.append(metric.value)
+        statuses.append(metric.status)
+
+    temp_table = Table([titles, descs, values, statuses], names=['metric_name', 'metric_description', 'metric_value', 'metric_status'])
+    votable = from_table(temp_table)
+    filename = dest_folder + '/gaskap-metrics.vot'
+    writeto(votable, filename)
     return
