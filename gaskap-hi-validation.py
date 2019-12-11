@@ -33,6 +33,7 @@ from spectral_cube import SpectralCube
 
 from validation_reporter import ValidationReport, ReportSection, ReportItem, ValidationMetric, output_html_report, output_metrics_xml
 
+vel_steps = [-324, -280, -234, -189, -143, -100, -60, -15, 30, 73, 119, 165, 200, 236, 273, 311, 357, 399]
 emission_vel_range=(119,165)*u.km/u.s 
 non_emission_val_range=(-100,-60)*u.km/u.s 
 figures_folder = 'figures'
@@ -51,6 +52,7 @@ def parseargs():
 
     parser.add_argument("-c", "--cube", required=True, help="The HI spectral line cube to be checked.")
     parser.add_argument("-o", "--output", help="The folder in which to save the validation report and associated figures.", default='report')
+    parser.add_argument("-e", "--emvel", required=True, help="The low velocity bound of the velcoity regon where emisison is expected.")
 
     parser.add_argument("-r", "--redo", help="Rerun all steps, even if intermediate files are present.", default=False,
                         action='store_true')
@@ -303,6 +305,22 @@ def measure_spectral_line_noise(slab, cube, vel_start, vel_end, reporter, dest_f
     return
 
 
+def set_velocity_range(emvelstr):
+    emvel = int(emvelstr)
+    if not emvel in vel_steps:
+        raise ValueError('Velocity {} is not one of the supported GASS velocity steps e.g. 165, 200.'.format(emvel))
+
+    idx = vel_steps.index(emvel)
+    if idx +1 >= len(vel_steps):
+        raise ValueError('Velocity {} is not one of the supported GASS velocity steps e.g. 165, 200.'.format(emvel))
+
+    # emission_vel_range=(vel_steps[idx],vel_steps[idx+1])*u.km/u.s
+    emission_vel_range[0]=vel_steps[idx]*u.km/u.s
+    emission_vel_range[1]=vel_steps[idx+1]*u.km/u.s
+    print ('\nSet emission velocity range to {:.0f} < v < {:.0f}'.format(emission_vel_range[0], emission_vel_range[1]))
+    
+
+
 def main():
     # Parse command line options
     args = parseargs()
@@ -315,6 +333,8 @@ def main():
 
     if not os.path.exists(args.cube) or not os.path.isfile(args.cube):
         raise ValueError('Cube {} could not be found or is not a file.'.format(args.cube))
+
+    set_velocity_range(args.emvel)
 
     start = time.time()
 
