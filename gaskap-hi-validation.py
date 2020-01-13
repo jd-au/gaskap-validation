@@ -23,6 +23,7 @@ import matplotlib
 matplotlib.use('agg')
 
 import aplpy
+from astropy.coordinates import SkyCoord
 from astropy.io import fits
 import astropy.units as u
 from astropy.wcs import WCS
@@ -34,6 +35,7 @@ from spectral_cube import SpectralCube
 from validation_reporter import ValidationReport, ReportSection, ReportItem, ValidationMetric, output_html_report, output_metrics_xml
 
 vel_steps = [-324, -280, -234, -189, -143, -100, -60, -15, 30, 73, 119, 165, 200, 236, 273, 311, 357, 399]
+#emission_vel_range=[] # (165,200)*u.km/u.s
 emission_vel_range=(119,165)*u.km/u.s 
 non_emission_val_range=(-100,-60)*u.km/u.s 
 figures_folder = 'figures'
@@ -52,7 +54,9 @@ def parseargs():
 
     parser.add_argument("-c", "--cube", required=True, help="The HI spectral line cube to be checked.")
     parser.add_argument("-o", "--output", help="The folder in which to save the validation report and associated figures.", default='report')
-    parser.add_argument("-e", "--emvel", required=True, help="The low velocity bound of the velcoity regon where emisison is expected.")
+    parser.add_argument("-e", "--emvel", required=True, help="The low velocity bound of the velocity region where emission is expected.")
+    parser.add_argument("-n", "--nonemvel", required=False, 
+                        help="The low velocity bound of the velocity region where emission is not expected.", default='-100')
 
     parser.add_argument("-r", "--redo", help="Rerun all steps, even if intermediate files are present.", default=False,
                         action='store_true')
@@ -83,7 +87,7 @@ def plot_map(file_prefix, cmap='magma', stretch='linear'):
     gc.close()
 
 
-def plot_difference_map(hdu, file_prefix, vmax):
+def plot_difference_map(hdu, file_prefix, vmax=None):
     # Initiate a figure and axis object with WCS projection information
     wcs = WCS(hdu.header)
     fig = plt.figure(figsize=(18, 12))
@@ -169,6 +173,80 @@ def assess_metric(metric, threshold1, threshold2, low_good=False):
         return METRIC_BAD if low_good else METRIC_GOOD
 
 
+def report_cube_stats(cube, reporter):
+    print ('\nReporting cube stats')
+
+    hdr = fits.getheader(cube)
+    w = WCS(hdr).celestial
+    
+    sbid = hdr['SBID'] if 'SBID' in hdr else ''
+    project = hdr['PROJECT'] if 'PROJECT' in hdr else ''
+    proj_link = None
+    if project.startswith('AS'):
+        proj_link = "https://confluence.csiro.au/display/askapsst/{0}+Data".format(project)
+
+    date = hdr['DATE-OBS']
+    duration = float(hdr['DURATION'])/3600 if 'DURATION' in hdr else 0
+
+    naxis1 = int(hdr['NAXIS1'])
+    naxis2 = int(hdr['NAXIS2'])
+    pixcrd = np.array([[naxis1/2, naxis2/2]])
+    centre = w.all_pix2world(pixcrd,1)
+    centre = SkyCoord(ra=centre[0][0], dec=centre[0][1], unit="deg,deg").to_string(style='hmsdms',sep=':')
+
+    # spectral axis
+    spectral_unit = 'None'
+    spectral_range = ''
+    for i in range(3,int(hdr['NAXIS'])+1):
+        ctype = hdr['CTYPE'+str(i)]
+        if (ctype.startswith('VEL') or ctype.startswith('VRAD') or ctype.startswith('FREQ')):
+            spectral_unit = hdr['CUNIT'+str(i)]
+            step = float(hdr['CDELT'+str(i)])
+            #print ('step {} rval {} rpix {} naxis {}'.format(step, hdr['CRVAL'+str(i)], hdr['CRPIX'+str(i)], hdr['NAXIS'+str(i)]))
+            spec_start = float(hdr['CRVAL'+str(i)]) - (step*(float(hdr['CRPIX'+str(i)])-1))
+            spec_end = spec_start + step * (int(hdr['NAXIS'+str(i)]-1))
+            spectral_range = '{:0.1f} - {:0.1f}'.format(spec_start, spec_end)
+    
+    # Cube information
+    askapSoftVer = 'N/A'
+    askapPipelineVer = 'N/A'
+    history = hdr['history']
+    askapSoftVerPrefix = 'Produced with ASKAPsoft version '
+    askapPipelinePrefix = 'Processed with ASKAP pipeline version '
+    for row in history:
+        if row.startswith(askapSoftVerPrefix):
+            askapSoftVer = row[len(askapSoftVerPrefix):]
+        elif row.startswith(askapPipelinePrefix):
+            askapPipelineVer = row[len(askapPipelinePrefix):]
+    beam = 'N/A'
+    if 'BMAJ' in hdr:
+        beam_maj = hdr['BMAJ'] * 60 * 60
+        beam_min = hdr['BMIN'] * 60 * 60
+        beam = '{:.1f} x {:.1f}'.format(beam_maj, beam_min)
+
+    # self.area,self.solid_ang = get_pixel_area(fits, nans=True, ra_axis=self.ra_axis, dec_axis=self.dec_axis, w=w)
+    
+
+
+    section = ReportSection('Observation')
+    section.add_item('SBID', value=sbid)
+    section.add_item('Project', value=project, link=proj_link)
+    section.add_item('Date', value=date)
+    section.add_item('Duration<br/>(hours)', value='{:.2f}'.format(duration))
+    section.add_item('Field Centre', value=centre)
+    section.add_item('Spectral Range<br/>({})'.format(spectral_unit), value=spectral_range)
+    reporter.add_section(section)
+
+    cube_name = os.path.basename(cube)
+    section = ReportSection('Image Cube', cube_name)
+    section.add_item('ASKAPsoft<br/>version', value=askapSoftVer)
+    section.add_item('Pipeline<br/>version', value=askapPipelineVer)
+    section.add_item('Synthesised Beam<br/>(arcsec)', value=beam)
+    section.add_item('Sky Area<br/>(deg2)', value='')
+    reporter.add_section(section)
+    return
+
+
 def check_for_emission(cube, vel_start, vel_end, reporter, dest_folder, ncores=8, redo=False):
     print ('\nChecking for presence of emission in {:.0f} < v < {:.0f}'.format(vel_start, vel_end))
 
@@ -181,7 +259,7 @@ def check_for_emission(cube, vel_start, vel_end, reporter, dest_folder, ncores=8
     mom0.write(mom0_fname, overwrite=True)
 
     hi_data = fits.open(mom0_fname)
-    plot_difference_map(hi_data[0], folder+prefix, vmax=3e3)
+    plot_difference_map(hi_data[0], folder+prefix)
 
     # Produce the background plots
     bkg_data = get_bane_background(mom0_fname, folder+prefix, ncores=ncores, redo=redo)
@@ -220,7 +298,7 @@ def check_for_non_emission(cube, vel_start, vel_end, reporter, dest_folder, ncor
     mom0.write(mom0_fname, overwrite=True)
 
     hi_data = fits.open(mom0_fname)
-    plot_difference_map(hi_data[0], folder+prefix, vmax=3e3)
+    plot_difference_map(hi_data[0], folder+prefix)
 
     # Produce the background plots
     bkg_data = get_bane_background(mom0_fname, folder+prefix, ncores=ncores, redo=redo)
@@ -305,9 +383,12 @@ def measure_spectral_line_noise(slab, cube, vel_start, vel_end, reporter, dest_f
     return
 
 
-def set_velocity_range(emvelstr):
+def set_velocity_range(emvelstr, nonemvelstr):
     emvel = int(emvelstr)
     if not emvel in vel_steps:
+        raise ValueError('Velocity {} is not one of the supported GASS velocity steps e.g. 165, 200.'.format(emvel))
+    nonemvel = int(nonemvelstr)
+    if not nonemvel in vel_steps:
         raise ValueError('Velocity {} is not one of the supported GASS velocity steps e.g. 165, 200.'.format(emvel))
 
     idx = vel_steps.index(emvel)
@@ -318,6 +399,15 @@ def set_velocity_range(emvelstr):
     emission_vel_range[0]=vel_steps[idx]*u.km/u.s
     emission_vel_range[1]=vel_steps[idx+1]*u.km/u.s
     print ('\nSet emission velocity range to {:.0f} < v < {:.0f}'.format(emission_vel_range[0], emission_vel_range[1]))
+
+    idx = vel_steps.index(nonemvel)
+    if idx +1 >= len(vel_steps):
+        raise ValueError('Velocity {} is not one of the supported GASS velocity steps e.g. 165, 200.'.format(emvel))
+
+    # emission_vel_range=(vel_steps[idx],vel_steps[idx+1])*u.km/u.s
+    non_emission_val_range[0]=vel_steps[idx]*u.km/u.s
+    non_emission_val_range[1]=vel_steps[idx+1]*u.km/u.s
+    print ('\nSet non emission velocity range to {:.0f} < v < {:.0f}'.format(non_emission_val_range[0], non_emission_val_range[1]))
     
 
 
@@ -334,7 +424,7 @@ def main():
     if not os.path.exists(args.cube) or not os.path.isfile(args.cube):
         raise ValueError('Cube {} could not be found or is not a file.'.format(args.cube))
 
-    set_velocity_range(args.emvel)
+    set_velocity_range(args.emvel, args.nonemvel)
 
     start = time.time()
 
@@ -342,6 +432,8 @@ def main():
 
     cube_name = os.path.basename(args.cube)
     reporter = ValidationReport('GASKAP Validation Report: {}'.format(cube_name))
+
+    report_cube_stats(args.cube, reporter)
 
     check_for_emission(args.cube, emission_vel_range[0], emission_vel_range[1], reporter, dest_folder, redo=args.redo)
 

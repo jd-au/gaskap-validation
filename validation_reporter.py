@@ -8,7 +8,7 @@ from astropy.table import Table
 from astropy.io.votable import from_table, writeto
 
 class ReportSection(object):
-    def __init__(self, title, target):
+    def __init__(self, title, target=None):
         self.title = title
         self.target = target
         self.items = []
@@ -100,6 +100,7 @@ def _output_section(f, section):
 
         if item.link:
             f.write('</a>')
+        f.write('</td>')
     f.write('\n</tr>\n<table>')
     return
 
