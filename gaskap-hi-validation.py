@@ -49,15 +49,17 @@ def parseargs():
     Parse the command line arguments
     :return: An args map with the parsed arguments
     """
-    parser = argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         description="Produce a validation report for GASKAP HI observatons")
 
-    parser.add_argument("-c", "--cube", required=True, help="The HI spectral line cube to be checked.")
+    parser.add_argument("-c", "--cube", required=False, help="The HI spectral line cube to be checked.")
     parser.add_argument("-o", "--output", help="The folder in which to save the validation report and associated figures.", default='report')
-    parser.add_argument("-e", "--emvel", required=True, help="The low velocity bound of the velocity region where emission is expected.")
+    parser.add_argument("-e", "--emvel", required=False, help="The low velocity bound of the velocity region where emission is expected.")
     parser.add_argument("-n", "--nonemvel", required=False, 
                         help="The low velocity bound of the velocity region where emission is not expected.", default='-100')
 
+    parser.add_argument("-i", "--image", required=False, help="The continuum image to be checked.")
+    parser.add_argument("-N", "--noise", required=False, help="Use this fits image of the local rms. Default is to run BANE", default=None)
     parser.add_argument("-r", "--redo", help="Rerun all steps, even if intermediate files are present.", default=False,
                         action='store_true')
 
@@ -152,16 +154,20 @@ def build_fname(example_name, suffix):
 def get_figures_folder(dest_folder):
     return dest_folder + '/' + figures_folder + '/'
 
-def get_bane_background(infile, outfile_prefix, ncores=8, redo=False):
+def get_bane_background(infile, outfile_prefix, ncores=8, redo=False, plot=True):
     background_prefix = outfile_prefix+'_bkg'
-    if redo or not os.path.exists(background_prefix + '.fits'):
+    background_file = background_prefix + '.fits'
+    if redo or not os.path.exists(background_file):
         cmd = "BANE --cores={0} --out={1} {2}".format(ncores, outfile_prefix, infile)
         print (cmd)
         os.system(cmd)
     
-    plot_map(background_prefix)
-    plot_histogram(background_prefix, 'Emission (Jy beam^{-1} km s^{-1})')
-    plot_map(outfile_prefix+'_rms')
+    if plot:
+        plot_map(background_prefix)
+        plot_histogram(background_prefix, 'Emission (Jy beam^{-1} km s^{-1})')
+        plot_map(outfile_prefix+'_rms')
+    
+    return background_file
 
 
 def assess_metric(metric, threshold1, threshold2, low_good=False):
@@ -173,12 +179,10 @@ def assess_metric(metric, threshold1, threshold2, low_good=False):
         return METRIC_BAD if low_good else METRIC_GOOD
 
 
-def report_cube_stats(cube, reporter):
-    print ('\nReporting cube stats')
-
-    hdr = fits.getheader(cube)
+def report_observation(image, reporter):
+    hdr = fits.getheader(image)
     w = WCS(hdr).celestial
-    
+
     sbid = hdr['SBID'] if 'SBID' in hdr else ''
     project = hdr['PROJECT'] if 'PROJECT' in hdr else ''
     proj_link = None
@@ -201,11 +205,41 @@ def report_cube_stats(cube, reporter):
         ctype = hdr['CTYPE'+str(i)]
         if (ctype.startswith('VEL') or ctype.startswith('VRAD') or ctype.startswith('FREQ')):
             spectral_unit = hdr['CUNIT'+str(i)]
+            spectral_conversion = 1
+            if spectral_unit == 'Hz':
+                spectral_conversion = 1e6
+                spectral_unit = 'MHz'
+            elif spectral_unit == 'kHz':
+                spectral_conversion = 1e3
+                spectral_unit = 'MHz'
+            
             step = float(hdr['CDELT'+str(i)])
             #print ('step {} rval {} rpix {} naxis {}'.format(step, hdr['CRVAL'+str(i)], hdr['CRPIX'+str(i)], hdr['NAXIS'+str(i)]))
-            spec_start = float(hdr['CRVAL'+str(i)]) - (step*(float(hdr['CRPIX'+str(i)])-1))
-            spec_end = spec_start + step * (int(hdr['NAXIS'+str(i)]-1))
-            spectral_range = '{:0.1f} - {:0.1f}'.format(spec_start, spec_end)
+            spec_start = (float(hdr['CRVAL'+str(i)]) - (step*(float(hdr['CRPIX'+str(i)])-1)))/spectral_conversion
+            if int(hdr['NAXIS'+str(i)]) > 1:
+                spec_end = (spec_start + step * (int(hdr['NAXIS'+str(i)]-1)))/spectral_conversion
+                spectral_range = '{:0.3f} - {:0.3f}'.format(spec_start, spec_end)
+                spec_title = 'Spectral Range'
+            else:
+                centre_freq = (float(hdr['CRVAL'+str(i)]) - (step*(float(hdr['CRPIX'+str(i)])-1)))/spectral_conversion 
+                spectral_range = '{:0.3f}'.format(centre_freq)
+                spec_title = 'Centre Freq'
+
+    section = ReportSection('Observation')
+    section.add_item('SBID', value=sbid)
+    section.add_item('Project', value=project, link=proj_link)
+    section.add_item('Date', value=date)
+    section.add_item('Duration<br/>(hours)', value='{:.2f}'.format(duration))
+    section.add_item('Field Centre', value=centre)
+    section.add_item('{}<br/>({})'.format(spec_title, spectral_unit), value=spectral_range)
+    reporter.add_section(section)
+
+
+def report_cube_stats(cube, reporter):
+    print ('\nReporting cube stats')
+
+    hdr = fits.getheader(cube)
+    w = WCS(hdr).celestial
     
     # Cube information
     askapSoftVer = 'N/A'
@@ -225,17 +259,6 @@ def report_cube_stats(cube, reporter):
         beam = '{:.1f} x {:.1f}'.format(beam_maj, beam_min)
 
     # self.area,self.solid_ang = get_pixel_area(fits, nans=True, ra_axis=self.ra_axis, dec_axis=self.dec_axis, w=w)
-    
-
-
-    section = ReportSection('Observation')
-    section.add_item('SBID', value=sbid)
-    section.add_item('Project', value=project, link=proj_link)
-    section.add_item('Date', value=date)
-    section.add_item('Duration<br/>(hours)', value='{:.2f}'.format(duration))
-    section.add_item('Field Centre', value=centre)
-    section.add_item('Spectral Range<br/>({})'.format(spectral_unit), value=spectral_range)
-    reporter.add_section(section)
 
     cube_name = os.path.basename(cube)
     section = ReportSection('Image Cube', cube_name)
@@ -383,6 +406,109 @@ def measure_spectral_line_noise(slab, cube, vel_start, vel_end, reporter, dest_f
     return
 
 
+def get_pixel_area(fits_file,flux=0,nans=False,ra_axis=0,dec_axis=1,w=None):
+
+    """For a given image, get the area and solid angle of all non-nan pixels or all pixels below a certain flux (doesn't count pixels=0).
+    The RA and DEC axes follow the WCS convention (i.e. starting from 0).
+
+    Arguments:
+    ----------
+    fits : astropy.io.fits
+        The primary axis of a fits image.
+
+    Keyword arguments:
+    ------------------
+    flux : float
+        The flux in Jy, below which pixels will be selected.
+    nans : bool
+        Derive the area and solid angle of all non-nan pixels.
+    ra_axis : int
+        The index of the RA axis (starting from 0).
+    dec_axis : int
+        The index of the DEC axis (starting from 0).
+    w : astropy.wcs.WCS
+        A wcs object to use for reading the pixel sizes.
+
+    Returns:
+    --------
+    area : float
+        The area in square degrees.
+    solid_ang : float
+        The solid angle in steradians.
+
+    See Also:
+    ---------
+    astropy.io.fits
+    astropy.wcs.WCS"""
+
+    if w is None:
+        w = WCS(fits_file.header)
+
+    #count the pixels and derive area and solid angle of all these pixels
+    if nans:
+        count = fits_file.data[(~np.isnan(fits_file.data)) & (fits_file.data != 0)].shape[0]
+    else:
+        count = fits_file.data[(fits_file.data < flux) & (fits_file.data != 0)].shape[0]
+
+    area = (count*np.abs(w.wcs.cdelt[ra_axis])*np.abs(w.wcs.cdelt[dec_axis]))
+    solid_ang = area*(np.pi/180)**2
+    return area,solid_ang
+
+
+def report_image_stats(image, noise_file, reporter, dest_folder, ncores=8, redo=False):
+    print ('\nReporting image stats')
+
+    fits_file = fits.open(image)
+    hdr = fits_file[0].header
+    w = WCS(hdr).celestial
+    
+    # Image information
+    askapSoftVer = 'N/A'
+    askapPipelineVer = 'N/A'
+    history = hdr['history']
+    askapSoftVerPrefix = 'Produced with ASKAPsoft version '
+    askapPipelinePrefix = 'Processed with ASKAP pipeline version '
+    for row in history:
+        if row.startswith(askapSoftVerPrefix):
+            askapSoftVer = row[len(askapSoftVerPrefix):]
+        elif row.startswith(askapPipelinePrefix):
+            askapPipelineVer = row[len(askapPipelinePrefix):]
+    beam = 'N/A'
+    if 'BMAJ' in hdr:
+        beam_maj = hdr['BMAJ'] * 60 * 60
+        beam_min = hdr['BMIN'] * 60 * 60
+        beam = '{:.1f} x {:.1f}'.format(beam_maj, beam_min)
+
+    # Analyse image data
+    area,solid_ang = get_pixel_area(fits_file[0], nans=False)
+    # if not noise_file:
+    #     prefix = build_fname(image, '')
+    #     folder = get_figures_folder(dest_folder)
+    #     noise_file = get_bane_background(image, folder+prefix, redo=redo, plot=False)
+    # rms_map = fits.open(noise_file)[0]
+    img_data = fits_file[0].data
+    img_peak = np.max(img_data[~np.isnan(img_data)])
+    # rms_bounds = rms_map.data > 0
+    # img_rms = int(np.median(rms_map.data[rms_bounds])*1e6) #uJy
+    # img_peak_bounds = np.max(img_data[rms_bounds])
+    # img_peak_pos = np.where(img_data == img_peak_bounds)
+    # img_peak_rms = rms_map.data[img_peak_pos][0]
+    # dynamic_range = img_peak_bounds/img_peak_rms
+    #img_flux = np.sum(img_data[~np.isnan(img_data)]) / (1.133*((beam_maj * beam_min) / (img.raPS * img.decPS))) #divide by beam area
+
+    image_name = os.path.basename(image)
+    section = ReportSection('Image', image_name)
+    section.add_item('ASKAPsoft<br/>version', value=askapSoftVer)
+    section.add_item('Pipeline<br/>version', value=askapPipelineVer)
+    section.add_item('Synthesised Beam<br/>(arcsec)', value=beam)
+    # section.add_item('Median r.m.s.<br/>(uJy)', value='{:.2f}'.format(img_rms))
+    # section.add_item('Image peak<br/>(Jy)', value='{:.2f}'.format(img_peak_bounds))
+    # section.add_item('Dynamic Range', value='{:.2f}'.format(dynamic_range))
+    section.add_item('Sky Area<br/>(deg2)', value='{:.2f}'.format(area))
+    reporter.add_section(section)
+    return
+
+
 def set_velocity_range(emvelstr, nonemvelstr):
     emvel = int(emvelstr)
     if not emvel in vel_steps:
@@ -421,25 +547,37 @@ def main():
     if not os.path.exists(figures_folder):
         os.makedirs(figures_folder)
 
-    if not os.path.exists(args.cube) or not os.path.isfile(args.cube):
+    if args.cube and (not os.path.exists(args.cube) or not os.path.isfile(args.cube)):
         raise ValueError('Cube {} could not be found or is not a file.'.format(args.cube))
+    if args.image and (not os.path.exists(args.image) or not os.path.isfile(args.image)):
+        raise ValueError('Image {} could not be found or is not a file.'.format(args.image))
+    if not args.cube and not args.image:
+        raise ValueError('You must supply either an image or a cube to validate.')
 
-    set_velocity_range(args.emvel, args.nonemvel)
+    if args.emvel:
+        set_velocity_range(args.emvel, args.nonemvel)
 
     start = time.time()
 
-    print ('\nChecking quality level of GASKAP HI cube:', args.cube)
-
-    cube_name = os.path.basename(args.cube)
+    if args.cube:
+        print ('\nChecking quality level of GASKAP HI cube:', args.cube)
+        obs_img = args.cube
+    else: 
+        print ('\nChecking quality level of GASKAP image:', args.image)
+        obs_img = args.image
+    cube_name = os.path.basename(obs_img)
     reporter = ValidationReport('GASKAP Validation Report: {}'.format(cube_name))
+    report_observation(obs_img, reporter)
 
-    report_cube_stats(args.cube, reporter)
+    if args.cube:
+        report_cube_stats(args.cube, reporter)
 
-    check_for_emission(args.cube, emission_vel_range[0], emission_vel_range[1], reporter, dest_folder, redo=args.redo)
+        check_for_emission(args.cube, emission_vel_range[0], emission_vel_range[1], reporter, dest_folder, redo=args.redo)
+        slab = check_for_non_emission(args.cube, non_emission_val_range[0], non_emission_val_range[1], reporter, dest_folder, redo=args.redo)
+        measure_spectral_line_noise(slab, args.cube, non_emission_val_range[0], non_emission_val_range[1], reporter, dest_folder, redo=args.redo)
 
-    slab = check_for_non_emission(args.cube, non_emission_val_range[0], non_emission_val_range[1], reporter, dest_folder, redo=args.redo)
-
-    measure_spectral_line_noise(slab, args.cube, non_emission_val_range[0], non_emission_val_range[1], reporter, dest_folder, redo=args.redo)
+    if args.image:
+        report_image_stats(args.image, args.noise, reporter, dest_folder, redo=args.redo)
 
     print ('\nProducing report to', dest_folder)
     output_html_report(reporter, dest_folder)
