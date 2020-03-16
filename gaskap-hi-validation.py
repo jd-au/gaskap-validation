@@ -23,6 +23,7 @@ import matplotlib
 matplotlib.use('agg')
 
 import aplpy
+from astropy.constants import k_B
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
 import astropy.units as u
@@ -217,7 +218,7 @@ def report_observation(image, reporter):
             #print ('step {} rval {} rpix {} naxis {}'.format(step, hdr['CRVAL'+str(i)], hdr['CRPIX'+str(i)], hdr['NAXIS'+str(i)]))
             spec_start = (float(hdr['CRVAL'+str(i)]) - (step*(float(hdr['CRPIX'+str(i)])-1)))/spectral_conversion
             if int(hdr['NAXIS'+str(i)]) > 1:
-                spec_end = (spec_start + step * (int(hdr['NAXIS'+str(i)]-1)))/spectral_conversion
+                spec_end = spec_start + (step * (int(hdr['NAXIS'+str(i)]-1)))/spectral_conversion
                 spectral_range = '{:0.3f} - {:0.3f}'.format(spec_start, spec_end)
                 spec_title = 'Spectral Range'
             else:
@@ -348,6 +349,40 @@ def check_for_non_emission(cube, vel_start, vel_end, reporter, dest_folder, ncor
     return slab
 
 
+def calc_theoretical_rms(chan_width, t_obs= 12*60*60, n_ant=36):
+    """
+    Calculating the theoretical rms noise for ASKAP. Assuming natural weighting and not taking into account fraction of flagged data. 
+    Based on WALLABY validation.
+
+    Parameters
+    ----------
+    chan_width : int
+        channel width in Hz
+    t_obs : int
+        duration of the observation in seconds
+    n_ant : int
+        Number of antennae
+        
+    Returns
+    -------
+    rms : int
+        Theoretical RMS in mJy
+    """
+    t_sys = 50*u.K   # WALLABY
+    ant_diam = 12 *u.m   # ASKAP
+    aper_eff = 0.8  # aperture efficiency - WALLABY
+    cor_eff = 0.8    # correlator efficiency - WALLABY
+    n_pol = 2.0      # Number of polarisation, npol = 2 for images in Stokes I, Q, U, or V
+    
+    ant_area = math.pi*(ant_diam/2)**2.
+    ant_eff = ant_area * aper_eff
+    sefd = (2. * k_B * t_sys/ant_eff).to(u.Jy)
+    rms_jy = sefd/(cor_eff*math.sqrt(n_pol*n_ant*(n_ant-1)*chan_width*t_obs))
+
+    return rms_jy.to(u.mJy).value
+
+
+
 def measure_spectral_line_noise(slab, cube, vel_start, vel_end, reporter, dest_folder, redo=False):
     print ('\nMeasuring the spectral line noise levels across {:.0f} < v < {:.0f}'.format(vel_start, vel_end))
     # Exract the spectral line noise map
@@ -396,7 +431,7 @@ def measure_spectral_line_noise(slab, cube, vel_start, vel_end, reporter, dest_f
     section.add_item('Spectral Axis Noise<br/>(mJy per 5 kHz)', value='{:.3f}'.format(median_noise_5kHz))
     reporter.add_section(section)
 
-    theoretical_gaskap_noise = 2.0 # mJy per 5 kHz for 12.5 hr observation (Dickey et al 2013 table 3)
+    theoretical_gaskap_noise = calc_theoretical_rms(5000) # mJy per 5 kHz for 12 hr observation
     metric = ValidationMetric('Spectral Noise', 
         '1-sigma spectral noise level per 5 kHz channel.',
         median_noise_5kHz, assess_metric(median_noise_5kHz, 
