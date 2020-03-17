@@ -51,15 +51,15 @@ def parseargs():
     :return: An args map with the parsed arguments
     """
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        description="Produce a validation report for GASKAP HI observatons")
+        description="Produce a validation report for GASKAP HI observations. Either a cube or an image (or both) must be supplied to be validated.")
 
     parser.add_argument("-c", "--cube", required=False, help="The HI spectral line cube to be checked.")
+    parser.add_argument("-i", "--image", required=False, help="The continuum image to be checked.")
     parser.add_argument("-o", "--output", help="The folder in which to save the validation report and associated figures.", default='report')
     parser.add_argument("-e", "--emvel", required=False, help="The low velocity bound of the velocity region where emission is expected.")
     parser.add_argument("-n", "--nonemvel", required=False, 
                         help="The low velocity bound of the velocity region where emission is not expected.", default='-100')
 
-    parser.add_argument("-i", "--image", required=False, help="The continuum image to be checked.")
     parser.add_argument("-N", "--noise", required=False, help="Use this fits image of the local rms. Default is to run BANE", default=None)
     parser.add_argument("-r", "--redo", help="Rerun all steps, even if intermediate files are present.", default=False,
                         action='store_true')
