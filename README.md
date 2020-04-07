@@ -1,7 +1,7 @@
 # gaskap-validation
-A validation suite for the GASKAP survey https://gaskap.anu.edu.au focussed on metrics for high resolution spectral line data of the diffuse Interstellar Medium (ISM) of the Milky Way and the Magellanic system.
+A validation suite for the GASKAP survey https://gaskap.anu.edu.au focused on metrics for high resolution spectral line data of the diffuse Interstellar Medium (ISM) of the Milky Way and the Magellanic system.
 
-These tests are based on the work of https://github.com/Jordatious/ASKAP-continuum-validation/ with adaptation to the expected MW ISM enviornment with many resolved objects. Additional tests are also present for the large scale emission and for the spectral line data.
+These tests are based on the work of https://github.com/Jordatious/ASKAP-continuum-validation/ with adaptation to the expected MW ISM environment with many resolved objects. Additional tests are also present for the large scale emission and for the spectral line data.
 
 ## Usage
 
@@ -71,8 +71,8 @@ We extract a ~40 km s<sup>-1</sup> slab from the cube at a velocity range where 
 
 Using the spectral slab from the off-line emission test, we measure the standard deviation of each pixel to assess the noise in the spectral cube.
 
-Taking the ~40 km s<sup>-1</sup> slab produced in the "Absence of Off-line Emission" test, we measure the standard deviation for the spectrum for each pixel. We scale this from the cube's native spectral resolution to a 5 kHz (~1 km s<sup-1></sup>) resolution. We then assess the median of this spectral noise level (in mJy) against the expected theoretical noise (sigma<sub>F</sub>) in 5 kHz channels for a 12 hour observation with ASKAP of 2.585 mJy as follows:
+Taking the ~40 km s<sup>-1</sup> slab produced in the "Absence of Off-line Emission" test, we measure the standard deviation for the spectrum for each pixel. We scale this from the cube's native spectral resolution to a 5 kHz (~1 km s<sup-1></sup>) resolution. We then assess the median of this spectral noise level (in mJy) against the expected theoretical noise (sigma<sub>F</sub>) in 5 kHz channels for a 12 hour observation with ASKAP of 2.880 mJy as follows:
 
-| Good        | Uncertain           | Bad  |
+| Good        | Uncertain         | Bad  |
 | -------------: |-------------:| -----:|
 | < sqrt(2) sigma<sub>F</sub>  | sqrt(2) sigma<sub>F</sub> - < 2 sqrt(2) sigma<sub>F</sub> | > 2 sqrt(2) sigma<sub>F</sub> |

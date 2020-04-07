@@ -4,7 +4,7 @@
 #
 
 # Author James Dempsey
-# Date 23 Nov 219
+# Date 23 Nov 2019
 
 
 from __future__ import print_function, division
@@ -83,8 +83,8 @@ def plot_histogram(file_prefix, xlabel):
 def plot_map(file_prefix, cmap='magma', stretch='linear'):
     gc = aplpy.FITSFigure(file_prefix+'.fits')
     gc.show_colorscale(cmap=cmap, stretch=stretch)
-    gc.show_colorbar()
-    gc.show_grid()
+    gc.add_colorbar()
+    gc.add_grid()
     gc.savefig(filename=file_prefix+'.png')
     gc.savefig(filename=file_prefix+'_sml.png', dpi=10 )
     gc.close()
@@ -142,8 +142,11 @@ def extract_slab(filename, vel_start, vel_end):
 
 
     if slab.unmasked_data[0,0,0].unit != u.Jy:
+        print ("Converting slab from {} to Jy".format(slab.unmasked_data[0,0,0].unit) )
+        print (slab)
         slab.allow_huge_operations=True
         slab = slab.to(u.Jy, equivalencies=u.brightness_temperature(my_beam, restfreq))
+        print (slab)
     return slab
 
 def build_fname(example_name, suffix):
@@ -180,6 +183,27 @@ def assess_metric(metric, threshold1, threshold2, low_good=False):
         return METRIC_BAD if low_good else METRIC_GOOD
 
 
+def get_spectral_units(ctype, cunit, hdr):
+    spectral_conversion = 1
+    if not cunit in hdr:
+        if ctype.startswith('VEL') or ctype.startswith('VRAD'):
+            spectral_unit = 'm/s'
+        else:
+            spectral_unit = 'Hz'
+    else:
+        spectral_unit = hdr[cunit]
+    if spectral_unit == 'Hz':
+        spectral_conversion = 1e6
+        spectral_unit = 'MHz'
+    elif spectral_unit == 'kHz':
+        spectral_conversion = 1e3
+        spectral_unit = 'MHz'
+    elif spectral_unit == 'm/s':
+        spectral_conversion = 1e3
+        spectral_unit = 'km/s'
+    return spectral_unit, spectral_conversion
+
+
 def report_observation(image, reporter):
     hdr = fits.getheader(image)
     w = WCS(hdr).celestial
@@ -205,21 +229,35 @@ def report_observation(image, reporter):
     for i in range(3,int(hdr['NAXIS'])+1):
         ctype = hdr['CTYPE'+str(i)]
         if (ctype.startswith('VEL') or ctype.startswith('VRAD') or ctype.startswith('FREQ')):
-            spectral_unit = hdr['CUNIT'+str(i)]
-            spectral_conversion = 1
-            if spectral_unit == 'Hz':
-                spectral_conversion = 1e6
-                spectral_unit = 'MHz'
-            elif spectral_unit == 'kHz':
-                spectral_conversion = 1e3
-                spectral_unit = 'MHz'
+            key = 'CUNIT'+str(i)
+            spectral_unit, spectral_conversion = get_spectral_units(ctype, key, hdr)
+            #spectral_conversion = 1
+            #if not key in hdr:
+            #    if ctype.startswith('VEL') or ctype.startswith('VRAD'):
+            #        spectral_unit = 'm/s'
+            #    else:
+            #        spectral_unit = 'Hz'
+            #else:
+            #    spectral_unit = hdr[key]
+            #if spectral_unit == 'Hz':
+            #    spectral_conversion = 1e6
+            #    spectral_unit = 'MHz'
+            #elif spectral_unit == 'kHz':
+            #    spectral_conversion = 1e3
+            #    spectral_unit = 'MHz'
+            #elif spectral_unit == 'm/s':
+            #    spectral_conversion = 1e3
+            #    spectral_unit = 'km/s'
             
             step = float(hdr['CDELT'+str(i)])
             #print ('step {} rval {} rpix {} naxis {}'.format(step, hdr['CRVAL'+str(i)], hdr['CRPIX'+str(i)], hdr['NAXIS'+str(i)]))
             spec_start = (float(hdr['CRVAL'+str(i)]) - (step*(float(hdr['CRPIX'+str(i)])-1)))/spectral_conversion
             if int(hdr['NAXIS'+str(i)]) > 1:
                 spec_end = spec_start + (step * (int(hdr['NAXIS'+str(i)]-1)))/spectral_conversion
-                spectral_range = '{:0.3f} - {:0.3f}'.format(spec_start, spec_end)
+                if step > 0:
+                    spectral_range = '{:0.3f} - {:0.3f}'.format(spec_start, spec_end)
+                else:
+                    spectral_range = '{:0.3f} - {:0.3f}'.format(spec_end, spec_start)
                 spec_title = 'Spectral Range'
             else:
                 centre_freq = (float(hdr['CRVAL'+str(i)]) - (step*(float(hdr['CRPIX'+str(i)])-1)))/spectral_conversion 
@@ -276,6 +314,7 @@ def check_for_emission(cube, vel_start, vel_end, reporter, dest_folder, ncores=8
 
     # Extract a moment 0 map
     slab = extract_slab(cube, vel_start, vel_end)
+    num_channels = slab.shape[0]
     mom0 = slab.moment0()
     prefix = build_fname(cube, '_mom0')
     folder = get_figures_folder(dest_folder)
@@ -298,6 +337,7 @@ def check_for_emission(cube, vel_start, vel_end, reporter, dest_folder, ncores=8
     cube_name = os.path.basename(cube)
     section = ReportSection('Presence of Emission', cube_name)
     section.add_item('Velocity Range<br/>(km/s LSR)', value='{:.0f} to {:.0f}'.format(vel_start.value, vel_end.value))
+    section.add_item('Channels', value='{}'.format(num_channels))
     section.add_item('Large Scale<br/>Emission Map', link=rel_map_page, image='figures/'+prefix+'_bkg_sml.png')
     section.add_item('Emission Histogram', link='figures/'+prefix+'_bkg_hist.png', image='figures/'+prefix+'_bkg_hist_sml.png')
     section.add_item('Max Emission<br/>(Jy km s<sup>-1</sup> beam<sup>-1</sup>)', value='{:.3f}'.format(max_em))
@@ -315,6 +355,7 @@ def check_for_non_emission(cube, vel_start, vel_end, reporter, dest_folder, ncor
 
     # Extract a moment 0 map
     slab = extract_slab(cube, vel_start, vel_end)
+    num_channels = slab.shape[0]
     mom0 = slab.moment0()
     prefix = build_fname(cube, '_mom0_off')
     folder = get_figures_folder(dest_folder)
@@ -337,6 +378,7 @@ def check_for_non_emission(cube, vel_start, vel_end, reporter, dest_folder, ncor
     cube_name = os.path.basename(cube)
     section = ReportSection('Absence of Off-line Emission', cube_name)
     section.add_item('Velocity Range<br/>(km/s LSR)', value='{:.0f} to {:.0f}'.format(vel_start.value, vel_end.value))
+    section.add_item('Channels', value='{}'.format(num_channels))
     section.add_item('Large Scale<br/>Emission Map', link=rel_map_page, image='figures/'+prefix+'_bkg_sml.png')
     section.add_item('Emission Histogram', link='figures/'+prefix+'_bkg_hist.png', image='figures/'+prefix+'_bkg_hist_sml.png')
     section.add_item('Max Emission<br/>(Jy km s<sup>-1</sup> beam<sup>-1</sup>)', value='{:.3f}'.format(max_em))
@@ -352,7 +394,7 @@ def check_for_non_emission(cube, vel_start, vel_end, reporter, dest_folder, ncor
 def calc_theoretical_rms(chan_width, t_obs= 12*60*60, n_ant=36):
     """
     Calculating the theoretical rms noise for ASKAP. Assuming natural weighting and not taking into account fraction of flagged data. 
-    Based on WALLABY validation.
+    Based on ASKAP SEFD measurement in SB 9944.
 
     Parameters
     ----------
@@ -368,15 +410,10 @@ def calc_theoretical_rms(chan_width, t_obs= 12*60*60, n_ant=36):
     rms : int
         Theoretical RMS in mJy
     """
-    t_sys = 50*u.K   # WALLABY
-    ant_diam = 12 *u.m   # ASKAP
-    aper_eff = 0.8  # aperture efficiency - WALLABY
     cor_eff = 0.8    # correlator efficiency - WALLABY
     n_pol = 2.0      # Number of polarisation, npol = 2 for images in Stokes I, Q, U, or V
+    sefd = 1700*u.Jy # As measured in SB 9944
     
-    ant_area = math.pi*(ant_diam/2)**2.
-    ant_eff = ant_area * aper_eff
-    sefd = (2. * k_B * t_sys/ant_eff).to(u.Jy)
     rms_jy = sefd/(cor_eff*math.sqrt(n_pol*n_ant*(n_ant-1)*chan_width*t_obs))
 
     return rms_jy.to(u.mJy).value
@@ -397,28 +434,37 @@ def measure_spectral_line_noise(slab, cube, vel_start, vel_end, reporter, dest_f
     # Produce the noise plots
     plot_map(folder+prefix, cmap='plasma', stretch='arcsinh')
     plot_histogram(folder+prefix, 'Noise level per channel (Jy beam^{-1})')
-    median_noise = np.nanmedian(std_data.value)
+    median_noise = np.nanmedian(std_data.value[std_data.value!=0.0])
 
     # Extract header details
     hdr = fits.getheader(cube)
     spec_sys = hdr['SPECSYS']
     axis = '3' if hdr['CTYPE3'] != 'STOKES' else '4'
     spec_type = hdr['CTYPE'+axis]
-    spec_unit = hdr['CUNIT'+axis] if 'CUNIT'+axis in hdr.keys() else None
+    spectral_unit, spectral_conversion = get_spectral_units(spec_type, 'CUNIT'+axis, hdr)
+    if 'CUNIT'+axis in hdr.keys():
+        spec_unit = hdr['CUNIT'+axis]
+    #elif spec_type == 'VRAD' or spec_type == 'VEL':
+    #    spec_unit = 'm/s'
+    else:
+        spec_unit = None
     spec_delt = hdr['CDELT'+axis]
-    print ('CDELT={}, CUNIT={}'.format(spec_delt, spec_unit))
+    print ('CDELT={}, CUNIT={}, spec_unit={}, conversion={}'.format(spec_delt, spec_unit, spectral_unit, spectral_conversion))
 
     axis = spec_sys + ' ' + spec_type
-    spec_res_km_s = np.abs(spec_delt)
-    if spec_unit == 'm/s':
-        spec_res_km_s /= 1000
-    elif spec_unit == 'Hz':
-            spec_res_km_s = spec_res_km_s/500*0.1 # 0.5 kHz = 0.1 km/s
-    elif spec_unit == 'kHz':
-        spec_res_km_s = spec_res_km_s/0.5*0.1 # 0.5 kHz = 0.1 km/s
+    spec_res_km_s = np.abs(spec_delt) / spectral_conversion
+    if spectral_unit == 'MHz':
+        spec_res_km_s = spec_res_km_s/5e-4*0.1 # 0.5 kHz = 0.1 km/s
+    #elif spec_unit == 'Hz':
+    #        spec_res_km_s = spec_res_km_s/500*0.1 # 0.5 kHz = 0.1 km/s
+    #elif spec_unit == 'kHz':
+    #    spec_res_km_s = spec_res_km_s/0.5*0.1 # 0.5 kHz = 0.1 km/s
 
     median_noise_5kHz = median_noise / np.sqrt(1 / spec_res_km_s)
     median_noise_5kHz *= 1000 # Jy => mJy
+
+    theoretical_gaskap_noise = calc_theoretical_rms(5000) # mJy per 5 kHz for 12 hr observation
+    median_ratio = median_noise_5kHz / theoretical_gaskap_noise
 
     # assess
     cube_name = os.path.basename(cube)
@@ -429,13 +475,13 @@ def measure_spectral_line_noise(slab, cube, vel_start, vel_end, reporter, dest_f
     section.add_item('Spectral Axis<br/>Noise Map', link='figures/'+prefix+'.png', image='figures/'+prefix+'_sml.png')
     section.add_item('Spectral Axis<br/>Noise Histogram', link='figures/'+prefix+'_hist.png', image='figures/'+prefix+'_hist_sml.png')
     section.add_item('Spectral Axis Noise<br/>(mJy per 5 kHz)', value='{:.3f}'.format(median_noise_5kHz))
+    section.add_item('Spectral Axis Noise<br/>(vs theoretical)', value='{:.3f}'.format(median_ratio))
     reporter.add_section(section)
 
-    theoretical_gaskap_noise = calc_theoretical_rms(5000) # mJy per 5 kHz for 12 hr observation
     metric = ValidationMetric('Spectral Noise', 
-        '1-sigma spectral noise level per 5 kHz channel.',
-        median_noise_5kHz, assess_metric(median_noise_5kHz, 
-        theoretical_gaskap_noise* np.sqrt(2), theoretical_gaskap_noise* np.sqrt(2)*2, low_good=True))
+        '1-sigma spectral noise comparison to theoretical per 5 kHz channel.',
+        median_ratio, assess_metric(median_ratio, 
+        np.sqrt(2), np.sqrt(2)*2, low_good=True))
     reporter.add_metric(metric)
 
     return
@@ -475,7 +521,7 @@ def get_pixel_area(fits_file,flux=0,nans=False,ra_axis=0,dec_axis=1,w=None):
     ---------
     astropy.io.fits
     astropy.wcs.WCS"""
-
+ 
     if w is None:
         w = WCS(fits_file.header)
 
