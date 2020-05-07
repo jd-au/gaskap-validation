@@ -26,14 +26,19 @@ import aplpy
 from astropy.constants import k_B
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
+from astropy.io.votable import parse, from_table, writeto
+from astropy.table import Table
 import astropy.units as u
 from astropy.wcs import WCS
 import matplotlib.pyplot as plt
 import numpy as np
 from radio_beam import Beam
 from spectral_cube import SpectralCube
+from statsmodels.tsa import stattools
+from statsmodels.graphics.tsaplots import plot_pacf
 
 from validation_reporter import ValidationReport, ReportSection, ReportItem, ValidationMetric, output_html_report, output_metrics_xml
+
 
 vel_steps = [-324, -280, -234, -189, -143, -100, -60, -15, 30, 73, 119, 165, 200, 236, 273, 311, 357, 399]
 #emission_vel_range=[] # (165,200)*u.km/u.s
@@ -55,7 +60,10 @@ def parseargs():
 
     parser.add_argument("-c", "--cube", required=False, help="The HI spectral line cube to be checked.")
     parser.add_argument("-i", "--image", required=False, help="The continuum image to be checked.")
+    parser.add_argument("-s", "--source_cat", required=False, help="The selavy source catalogue used for source identification.")
+
     parser.add_argument("-o", "--output", help="The folder in which to save the validation report and associated figures.", default='report')
+
     parser.add_argument("-e", "--emvel", required=False, help="The low velocity bound of the velocity region where emission is expected.")
     parser.add_argument("-n", "--nonemvel", required=False, 
                         help="The low velocity bound of the velocity region where emission is not expected.", default='-100')
@@ -63,9 +71,17 @@ def parseargs():
     parser.add_argument("-N", "--noise", required=False, help="Use this fits image of the local rms. Default is to run BANE", default=None)
     parser.add_argument("-r", "--redo", help="Rerun all steps, even if intermediate files are present.", default=False,
                         action='store_true')
+    parser.add_argument("--num_spectra", required=False, help="Number of sample spectra to create", type=int, default=15)
 
     args = parser.parse_args()
     return args
+
+
+def get_str(value):
+    if isinstance(value, bytes):
+        return value.decode()
+    return value
+
 
 def plot_histogram(file_prefix, xlabel):
     data = fits.getdata(file_prefix+'.fits')
@@ -127,12 +143,7 @@ def output_map_page(filename, file_prefix, title):
         mp.write('\n</body>\n</html>\n')
 
 
-def extract_slab(filename, vel_start, vel_end):
-    cube = SpectralCube.read(filename)
-    vel_cube = cube.with_spectral_unit(u.m/u.s, velocity_convention='radio')
-    slab = vel_cube.spectral_slab(vel_start, vel_end)
-
-    header = fits.getheader(filename)
+def convert_slab_to_jy(slab, header):
     my_beam = Beam.from_fits_header(header)
     restfreq = 	1.420405752E+09*u.Hz
     if 'RESTFREQ' in header.keys():
@@ -140,13 +151,46 @@ def extract_slab(filename, vel_start, vel_end):
     elif 'RESTFRQ' in header.keys():
         restfreq = header['RESTFRQ']*u.Hz
 
-
     if slab.unmasked_data[0,0,0].unit != u.Jy:
         print ("Converting slab from {} to Jy".format(slab.unmasked_data[0,0,0].unit) )
         print (slab)
         slab.allow_huge_operations=True
         slab = slab.to(u.Jy, equivalencies=u.brightness_temperature(my_beam, restfreq))
         print (slab)
+    return slab
+
+
+def convert_data_to_jy(data, header, verbose=False):
+    my_beam = Beam.from_fits_header(header)
+    restfreq = 	1.420405752E+09*u.Hz
+    if 'RESTFREQ' in header.keys():
+        restfreq = header['RESTFREQ']*u.Hz
+    elif 'RESTFRQ' in header.keys():
+        restfreq = header['RESTFRQ']*u.Hz
+
+    if data[0].unit != u.Jy:
+        if verbose:
+            print ("Converting data from {} to Jy".format(data[0].unit) )
+        data = data.to(u.Jy, equivalencies=u.brightness_temperature(my_beam, restfreq))
+    return data
+
+
+def extract_slab(filename, vel_start, vel_end):
+    cube = SpectralCube.read(filename)
+    vel_cube = cube.with_spectral_unit(u.m/u.s, velocity_convention='radio')
+    slab = vel_cube.spectral_slab(vel_start, vel_end)
+
+    header = fits.getheader(filename)
+    slab = convert_slab_to_jy(slab, header)
+    return slab
+
+
+def extract_channel_slab(filename, chan_start, chan_end):
+    cube = SpectralCube.read(filename)
+    vel_cube = cube.with_spectral_unit(u.m/u.s, velocity_convention='radio')
+    slab = vel_cube[chan_start:chan_end,:, :].with_spectral_unit(u.km/u.s)
+
+    header = fits.getheader(filename)
     return slab
 
 def build_fname(example_name, suffix):
@@ -615,10 +659,220 @@ def set_velocity_range(emvelstr, nonemvelstr):
     non_emission_val_range[0]=vel_steps[idx]*u.km/u.s
     non_emission_val_range[1]=vel_steps[idx+1]*u.km/u.s
     print ('\nSet non emission velocity range to {:.0f} < v < {:.0f}'.format(non_emission_val_range[0], non_emission_val_range[1]))
+
+
+def identify_periodicity(spectrum):
+    """
+    Check if there are periodic features in a spectrum. This tests if there are patterns which are 
+    present in the spectrum seperated by a specific number of channels (or lag). i.e. if the same 
+    pattern repeats every so many channels. Only features with at least 3-sigma significance are 
+    returned.
+
+    Arguments:
+    ----------
+    spectrum : array-like
+        The numerical spectrum.
+
+    Returns:
+    --------
+    repeats: array
+        The lag intervals that have 3-sigma or greater periodic features
+    sigma: array
+        The significance of each repeat value, in sigma.
+    """
+    # Use a partial auto-correlation function to identify repeated patterns
+    pacf = stattools.pacf(spectrum, nlags=50)
+    sd = np.std(pacf[1:])
+    significance= pacf/sd
+    indexes = (significance>3).nonzero()[0]
+    repeats = indexes[indexes>3]
+    return repeats, significance[repeats]
+
+
+def plot_all_spectra(spectra, names, velocities, em_unit, vel_unit, figures_folder):
+    fig = plt.figure(figsize=(18, 12))
+    for idx, spectrum in enumerate(spectra):
+        label = get_str(names[idx])
+
+        ax = fig.add_subplot(5, 3, idx+1)
+        ax.plot(velocities, spectrum, linewidth=1)
+        ax.set_title(label)
+        ax.grid()
+        if idx > 2*5:
+            ax.set_xlabel("$v_{LSRK}$ " + '({})'.format(vel_unit))
+        if idx % 3 == 0:
+            ax.set_ylabel(em_unit)
+
+    fig.tight_layout() 
+    fig.savefig(figures_folder+'/spectra-individual.pdf')
+
+
+def plot_overlaid_spectra(spectra, names, velocities, em_unit, vel_unit, figures_folder, cube_name):
+    fig = plt.figure(figsize=(18, 12))
+    ax = fig.add_subplot()
+    for i, spec in enumerate(spectra):
+        label = get_str(names[i])
+        ax.plot(velocities, spec, label=label)
+    ax.set_xlabel("$v_{LSRK}$ " + '({})'.format(vel_unit))
+    ax.set_ylabel(em_unit)
+    ax.legend()
+    ax.grid()
+    ax.set_title('Spectra for {} brightest sources in {}'.format(len(spectra), cube_name))
+    plt.savefig(figures_folder+'/spectra.png')
+    plt.savefig(figures_folder+'/spectra_sml.png', dpi=16)
+
+
+def output_spectra_page(filename, prefix, title):
+    with open(filename, 'w') as mp:
+        mp.write('<html>\n<head><title>{}</title>\n</head>'.format(title))
+        mp.write('\n<body>\n<h1>{}</h1>'.format(title))
+
+        output_plot(mp, 'All Spectra', prefix + 'spectra.png')
+        output_plot(mp, 'Individual Spectra', prefix + 'spectra-individual.pdf')
+        mp.write('\n</body>\n</html>\n')
+
+
+def plot_periodic_spectrum(spectrum, fig, name):
+    ax = fig.add_subplot(211)
+    ax.plot(spectrum)
+    ax.set_title('Spectrum for ' + name)
+    ax.grid()
+
+    ax = fig.add_subplot(212)
+    plot_pacf(spectrum, lags=50, ax=ax)
+
+    fig.tight_layout()
+
+
+def output_periodic_spectra_page(filename, prefix, title, periodic, detections):
+    with open(filename, 'w') as mp:
+        mp.write('<html>\n<head><title>{}</title>\n</head>'.format(title))
+        mp.write('\n<body>\n<h1>{}</h1>'.format(title))
+
+        for idx, src_name in enumerate(periodic):
+            output_plot(mp, src_name, prefix + '{}_periodicity.png'.format(src_name))
+            mp.write('<p>{}</p>'.format(detections[idx]))
+        mp.write('\n</body>\n</html>\n')
+
+
+def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, slab_size=40):
+    print ('\nExtracting spectra for the {} brightest sources in {}'.format(num_spectra, source_cat))
+
+    # Prepare the output folders
+    spectra_folder = dest_folder + '/spectra'
+    if not os.path.exists(spectra_folder):
+        os.makedirs(spectra_folder)
+    figures_folder = dest_folder + '/figures'
+
+    # Read the source list and idetify the brightest sources
+    votable = parse(source_cat, pedantic=False)
+    sources = votable.get_first_table()
+    bright_idx = np.argsort(sources.array['flux_peak'])[-num_spectra:]
+    bright_srcs = sources.array[bright_idx]
+    bright_srcs.sort(order='component_name')
+
+    # Read the cube
+    spec_cube = SpectralCube.read(cube)
+    vel_cube = spec_cube.with_spectral_unit(u.m/u.s, velocity_convention='radio')
+    wcs = vel_cube.wcs.celestial
+    spec_len =vel_cube.shape[0]
+    header = fits.getheader(cube)
+
+    # Identify the target pixels for each spectrum
+    pix_pos = []
+    for source in bright_srcs:
+        pos = SkyCoord(ra=source['ra_deg_cont']*u.deg, dec=source['dec_deg_cont']*u.deg)
+        pixel = pos.to_pixel(wcs=wcs)
+        rnd = np.round(pixel)
+        pix_pos.append((int(rnd[0]), int(rnd[1])))
+
+    # Extract the spectra
+    start = time.time()
+    print("  ## Started spectra extract at {} ##".format(
+          (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start)))))
+    prev = start
+    spectra = []
+    for p in pix_pos:
+        spectra.append(np.zeros(spec_len))
     
+    # Extract using slabs
+    unit = None
+    for i in range(0,spec_len,slab_size):
+        checkpoint = time.time()
+        max_idx = min(i+slab_size, spec_len)
+        slab = extract_channel_slab(cube, i, max_idx)
+        print (slab)
+        unit = slab.unit
+
+        for j, pos in enumerate(pix_pos):
+            data = slab[:,pos[0], pos[1]]
+            #data = convert_data_to_jy(data, header)
+            spectra[j][i:max_idx] = data.value
+        
+        print ("Scanning slab of channels {} to {}, took {:.2f} s".format(i, max_idx-1, checkpoint-prev))
+        prev = checkpoint
+
+    end = time.time()
+    print("  ## Finished spectra extract at {}, took {:.2f} s ##".format(
+          time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end)), end-start))
+        
+    # Plot the spectra
+    names = bright_srcs['component_name']
+    em_unit = str(vel_cube.unit)
+    velocities = vel_cube.spectral_axis.to(u.km/u.s)
+    plot_overlaid_spectra(spectra, names, velocities, em_unit, 'km/s', figures_folder, os.path.basename(cube))
+    plot_all_spectra(spectra, names, velocities, em_unit, 'km/s', figures_folder)
+    bright_spectra_file = figures_folder+'/bright_spectra.html'
+    output_spectra_page(bright_spectra_file, './', "Spectra for 15 Brightest Sources")
+
+    # Save the spectra
+    for idx, spec in enumerate(spectra):
+        name = get_str(names[idx])
+        spec_table = Table(
+            [vel_cube.spectral_axis.to(u.km/u.s), spec*vel_cube.unit],
+            names=['Velocity', 'Emission'],
+            meta={'ID': name})
+        votable = from_table(spec_table)
+        writeto(votable, '{}/{}.vot'.format(spectra_folder, name))
+    
+    # Check for periodicity in the spectra
+    num_bright_periodic = 0
+    bright_periodic = []
+    detections = []
+    for idx, spec in enumerate(spectra):
+        if spec.any():
+            repeats, sig = identify_periodicity(spec)
+            if len(repeats)>0:
+                num_bright_periodic += 1
+                name = get_str(names[idx])
+                bright_periodic.append(name)
+                fig = plt.figure(figsize=(8, 6))
+                plot_periodic_spectrum(spec, fig, name)
+                fig.savefig(figures_folder+'/{}_periodicity.png'.format(name))
+                detections.append("Detected periodicity with lag {} of significance {}".format(repeats, sig))
+                print ("Spectrum for {} has periodicity with lag {} of signficance {}".format(name, repeats, sig))
+    bright_periodic_str = 'None' if len(bright_periodic) == 0 else '<br/>'.join(bright_periodic)
+    output_periodic_spectra_page(figures_folder+'/periodic_spectra.html', './', "Spectra with Periodic Features", bright_periodic, detections)
+
+    # Output the report
+    cube_name = os.path.basename(cube)
+    section = ReportSection('Spectra', cube_name)
+    section.add_item('Bright Source Spectra', link='figures/bright_spectra.html', image='figures/spectra_sml.png')
+    section.add_item('Spectra wth periodic features', link='figures/periodic_spectra.html', value=bright_periodic_str)
+    reporter.add_section(section)
+
+    metric = ValidationMetric('Spectra periodicity', 
+        'Number of spectra with repeated patterns with more than 3-sigma significance ',
+        num_bright_periodic, assess_metric(num_bright_periodic, 
+        1, 5, low_good=True))
+    reporter.add_metric(metric)
 
 
 def main():
+    start = time.time()
+    print("#### Started validation at {} ####".format(
+          (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start)))))
+
     # Parse command line options
     args = parseargs()
     dest_folder = args.output
@@ -635,10 +889,11 @@ def main():
     if not args.cube and not args.image:
         raise ValueError('You must supply either an image or a cube to validate.')
 
+    if args.source_cat and (not os.path.exists(args.source_cat) or not os.path.isfile(args.source_cat)):
+        raise ValueError('Source catalogue {} could not be found or is not a file.'.format(args.source_cat))
+
     if args.emvel:
         set_velocity_range(args.emvel, args.nonemvel)
-
-    start = time.time()
 
     if args.cube:
         print ('\nChecking quality level of GASKAP HI cube:', args.cube)
@@ -656,6 +911,8 @@ def main():
         check_for_emission(args.cube, emission_vel_range[0], emission_vel_range[1], reporter, dest_folder, redo=args.redo)
         slab = check_for_non_emission(args.cube, non_emission_val_range[0], non_emission_val_range[1], reporter, dest_folder, redo=args.redo)
         measure_spectral_line_noise(slab, args.cube, non_emission_val_range[0], non_emission_val_range[1], reporter, dest_folder, redo=args.redo)
+        if args.source_cat:
+            extract_spectra(args.cube, args.source_cat, dest_folder, reporter, args.num_spectra)
 
     if args.image:
         report_image_stats(args.image, args.noise, reporter, dest_folder, redo=args.redo)
@@ -665,6 +922,8 @@ def main():
     output_metrics_xml(reporter, dest_folder)
 
     end = time.time()
+    print("#### Completed validation at {} ####".format(
+          (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end)))))
     print('\nChecks completed in {:.02f} s'.format((end - start)))
     return 0
 
