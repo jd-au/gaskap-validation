@@ -92,7 +92,7 @@ def _output_section(f, section):
             f.write('<a href="{}">'.format(item.link))
 
         if item.value:
-            f.write(item.value)
+            f.write(str(item.value))
         elif item.image:
             f.write('<img src="{}">'.format(item.image))
         else:
