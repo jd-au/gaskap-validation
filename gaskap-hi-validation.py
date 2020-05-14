@@ -25,9 +25,9 @@ matplotlib.use('agg')
 import aplpy
 from astropy.constants import k_B
 from astropy.coordinates import SkyCoord
-from astropy.io import fits
+from astropy.io import ascii, fits
 from astropy.io.votable import parse, from_table, writeto
-from astropy.table import Table
+from astropy.table import Table, Column
 import astropy.units as u
 from astropy.wcs import WCS
 import matplotlib.pyplot as plt
@@ -61,6 +61,7 @@ def parseargs():
     parser.add_argument("-c", "--cube", required=False, help="The HI spectral line cube to be checked.")
     parser.add_argument("-i", "--image", required=False, help="The continuum image to be checked.")
     parser.add_argument("-s", "--source_cat", required=False, help="The selavy source catalogue used for source identification.")
+    parser.add_argument("-b", "--beam_list", required=False, help="The csv file describing the positions of each beam (in radians).")
 
     parser.add_argument("-o", "--output", help="The folder in which to save the validation report and associated figures.", default='report')
 
@@ -174,12 +175,18 @@ def convert_data_to_jy(data, header, verbose=False):
         data = data.to(u.Jy, equivalencies=u.brightness_temperature(my_beam, restfreq))
     return data
 
+def get_vel_limit(vel_cube):
+    velocities = np.sort(vel_cube.spectral_axis)
+    return velocities[0], velocities[-1]
 
 def extract_slab(filename, vel_start, vel_end):
     cube = SpectralCube.read(filename)
     vel_cube = cube.with_spectral_unit(u.m/u.s, velocity_convention='radio')
-    slab = vel_cube.spectral_slab(vel_start, vel_end)
+    cube_vel_min, cube_vel_max = get_vel_limit(vel_cube)
+    if vel_start > cube_vel_max or vel_end < cube_vel_min:
+        return None
 
+    slab = vel_cube.spectral_slab(vel_start, vel_end)
     header = fits.getheader(filename)
     slab = convert_slab_to_jy(slab, header)
     return slab
@@ -275,23 +282,6 @@ def report_observation(image, reporter):
         if (ctype.startswith('VEL') or ctype.startswith('VRAD') or ctype.startswith('FREQ')):
             key = 'CUNIT'+str(i)
             spectral_unit, spectral_conversion = get_spectral_units(ctype, key, hdr)
-            #spectral_conversion = 1
-            #if not key in hdr:
-            #    if ctype.startswith('VEL') or ctype.startswith('VRAD'):
-            #        spectral_unit = 'm/s'
-            #    else:
-            #        spectral_unit = 'Hz'
-            #else:
-            #    spectral_unit = hdr[key]
-            #if spectral_unit == 'Hz':
-            #    spectral_conversion = 1e6
-            #    spectral_unit = 'MHz'
-            #elif spectral_unit == 'kHz':
-            #    spectral_conversion = 1e3
-            #    spectral_unit = 'MHz'
-            #elif spectral_unit == 'm/s':
-            #    spectral_conversion = 1e3
-            #    spectral_unit = 'km/s'
             
             step = float(hdr['CDELT'+str(i)])
             #print ('step {} rval {} rpix {} naxis {}'.format(step, hdr['CRVAL'+str(i)], hdr['CRPIX'+str(i)], hdr['NAXIS'+str(i)]))
@@ -341,6 +331,11 @@ def report_cube_stats(cube, reporter):
         beam_min = hdr['BMIN'] * 60 * 60
         beam = '{:.1f} x {:.1f}'.format(beam_maj, beam_min)
 
+    dims = []
+    for i in range(1,int(hdr['NAXIS'])+1):
+        dims.append(str(hdr['NAXIS'+str(i)]))
+    dimensions = ' x '.join(dims)
+
     # self.area,self.solid_ang = get_pixel_area(fits, nans=True, ra_axis=self.ra_axis, dec_axis=self.dec_axis, w=w)
 
     cube_name = os.path.basename(cube)
@@ -349,6 +344,7 @@ def report_cube_stats(cube, reporter):
     section.add_item('Pipeline<br/>version', value=askapPipelineVer)
     section.add_item('Synthesised Beam<br/>(arcsec)', value=beam)
     section.add_item('Sky Area<br/>(deg2)', value='')
+    section.add_item('Dimensions', value=dimensions)
     reporter.add_section(section)
     return
 
@@ -358,6 +354,10 @@ def check_for_emission(cube, vel_start, vel_end, reporter, dest_folder, ncores=8
 
     # Extract a moment 0 map
     slab = extract_slab(cube, vel_start, vel_end)
+    if slab is None:
+        print ("** No data for the emission range - skipping check **")
+        return
+
     num_channels = slab.shape[0]
     mom0 = slab.moment0()
     prefix = build_fname(cube, '_mom0')
@@ -399,6 +399,10 @@ def check_for_non_emission(cube, vel_start, vel_end, reporter, dest_folder, ncor
 
     # Extract a moment 0 map
     slab = extract_slab(cube, vel_start, vel_end)
+    if slab is None:
+        print ("** No data for the non-emission range - skipping check **")
+        return None
+
     num_channels = slab.shape[0]
     mom0 = slab.moment0()
     prefix = build_fname(cube, '_mom0_off')
@@ -466,7 +470,12 @@ def calc_theoretical_rms(chan_width, t_obs= 12*60*60, n_ant=36):
 
 def measure_spectral_line_noise(slab, cube, vel_start, vel_end, reporter, dest_folder, redo=False):
     print ('\nMeasuring the spectral line noise levels across {:.0f} < v < {:.0f}'.format(vel_start, vel_end))
-    # Exract the spectral line noise map
+
+    if slab is None:
+        print ("** No data for the non-emission range - skipping check **")
+        return
+
+    # Extract the spectral line noise map
     std_data = np.nanstd(slab.unmasked_data[:], axis=0)
     mom0_prefix = build_fname(cube, '_mom0_off')
     folder = get_figures_folder(dest_folder)
@@ -681,7 +690,7 @@ def identify_periodicity(spectrum):
         The significance of each repeat value, in sigma.
     """
     # Use a partial auto-correlation function to identify repeated patterns
-    pacf = stattools.pacf(spectrum, nlags=50)
+    pacf = stattools.pacf(spectrum, nlags=min(50, len(spectrum)//5))
     sd = np.std(pacf[1:])
     significance= pacf/sd
     indexes = (significance>3).nonzero()[0]
@@ -689,37 +698,58 @@ def identify_periodicity(spectrum):
     return repeats, significance[repeats]
 
 
-def plot_all_spectra(spectra, names, velocities, em_unit, vel_unit, figures_folder):
-    fig = plt.figure(figsize=(18, 12))
+def plot_all_spectra(spectra, names, velocities, em_unit, vel_unit, figures_folder, prefix):
+    fig = None
+    if len(spectra) > 20:
+        fig = plt.figure(figsize=(18, 72))
+    else:
+        fig = plt.figure(figsize=(18, 12))
+    num_rows = math.ceil(len(spectra)/3)
     for idx, spectrum in enumerate(spectra):
         label = get_str(names[idx])
 
-        ax = fig.add_subplot(5, 3, idx+1)
+        ax = fig.add_subplot(num_rows, 3, idx+1)
         ax.plot(velocities, spectrum, linewidth=1)
         ax.set_title(label)
         ax.grid()
-        if idx > 2*5:
+        if idx > 2*num_rows:
             ax.set_xlabel("$v_{LSRK}$ " + '({})'.format(vel_unit))
         if idx % 3 == 0:
             ax.set_ylabel(em_unit)
 
     fig.tight_layout() 
-    fig.savefig(figures_folder+'/spectra-individual.pdf')
+    fig.savefig(figures_folder+'/'+prefix+'-spectra-individual.pdf')
 
 
-def plot_overlaid_spectra(spectra, names, velocities, em_unit, vel_unit, figures_folder, cube_name):
+def plot_overlaid_spectra(spectra, names, velocities, em_unit, vel_unit, figures_folder, cube_name, prefix):
     fig = plt.figure(figsize=(18, 12))
-    ax = fig.add_subplot()
+    axes = []
+    if len(spectra) > 36:
+        for i in range(1,4):
+            ax = fig.add_subplot(3,1,i)
+            axes.append(ax)
+    else:
+        ax = fig.add_subplot()
+        axes.append(ax)
     for i, spec in enumerate(spectra):
         label = get_str(names[i])
+        idx = 0
+        if len(axes) > 1:
+            interleave = label[-4]
+            idx = ord(interleave) - ord('A')
+        ax = axes[idx]
         ax.plot(velocities, spec, label=label)
-    ax.set_xlabel("$v_{LSRK}$ " + '({})'.format(vel_unit))
-    ax.set_ylabel(em_unit)
-    ax.legend()
-    ax.grid()
-    ax.set_title('Spectra for {} brightest sources in {}'.format(len(spectra), cube_name))
-    plt.savefig(figures_folder+'/spectra.png')
-    plt.savefig(figures_folder+'/spectra_sml.png', dpi=16)
+    for idx, ax in enumerate(axes):
+        ax.set_xlabel("$v_{LSRK}$ " + '({})'.format(vel_unit))
+        ax.set_ylabel(em_unit)
+        ax.legend()
+        ax.grid()
+        if len(axes) > 1:
+            ax.set_title('Spectra for all beams in interleave {}'.format(chr(ord('A')+idx)))
+        else:
+            ax.set_title('Spectra for {} brightest sources in {}'.format(len(spectra), cube_name))
+    plt.savefig(figures_folder+'/'+prefix+'-spectra.png')
+    plt.savefig(figures_folder+'/'+prefix+'-spectra_sml.png', dpi=16)
 
 
 def output_spectra_page(filename, prefix, title):
@@ -727,8 +757,8 @@ def output_spectra_page(filename, prefix, title):
         mp.write('<html>\n<head><title>{}</title>\n</head>'.format(title))
         mp.write('\n<body>\n<h1>{}</h1>'.format(title))
 
-        output_plot(mp, 'All Spectra', prefix + 'spectra.png')
-        output_plot(mp, 'Individual Spectra', prefix + 'spectra-individual.pdf')
+        output_plot(mp, 'All Spectra', prefix + '-spectra.png')
+        output_plot(mp, 'Individual Spectra', prefix + '-spectra-individual.pdf')
         mp.write('\n</body>\n</html>\n')
 
 
@@ -755,8 +785,18 @@ def output_periodic_spectra_page(filename, prefix, title, periodic, detections):
         mp.write('\n</body>\n</html>\n')
 
 
-def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, slab_size=40):
-    print ('\nExtracting spectra for the {} brightest sources in {}'.format(num_spectra, source_cat))
+def save_spectum(name, velocities, fluxes, ra, dec, spectra_folder):
+    spec_table = Table(
+        [velocities, fluxes],
+        names=['Velocity', 'Emission'],
+        meta={'ID': name, 'RA' : ra, 'Dec': dec})
+    votable = from_table(spec_table)
+    writeto(votable, '{}/{}.vot'.format(spectra_folder, name))
+
+
+def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, beam_list, slab_size=40):
+    print('\nExtracting spectra for the {} brightest sources in {} and beams listed in {}'.format(
+        num_spectra, source_cat, beam_list))
 
     # Prepare the output folders
     spectra_folder = dest_folder + '/spectra'
@@ -764,12 +804,30 @@ def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, slab_s
         os.makedirs(spectra_folder)
     figures_folder = dest_folder + '/figures'
 
-    # Read the source list and idetify the brightest sources
-    votable = parse(source_cat, pedantic=False)
-    sources = votable.get_first_table()
-    bright_idx = np.argsort(sources.array['flux_peak'])[-num_spectra:]
-    bright_srcs = sources.array[bright_idx]
-    bright_srcs.sort(order='component_name')
+    # Read the source list and identify the brightest sources
+    bright_srcs = []
+    bright_src_pos = []
+    if source_cat:
+        votable = parse(source_cat, pedantic=False)
+        sources = votable.get_first_table()
+        bright_idx = np.argsort(sources.array['flux_peak'])[-num_spectra:]
+        bright_srcs = sources.array[bright_idx]
+        bright_srcs.sort(order='component_name')
+        for idx, src in enumerate(bright_srcs):
+            pos = SkyCoord(ra=src['ra_deg_cont']*u.deg, dec=src['dec_deg_cont']*u.deg)
+            bright_src_pos.append(pos)
+
+    # Read the beams
+    beams = []
+    if beam_list:
+        beams = ascii.read(beam_list)
+        beams.add_column(Column(name='pos', data=np.empty((len(beams)), dtype=object)))
+        beams.add_column(Column(name='name', data=np.empty((len(beams)), dtype=object)))
+        for beam in beams:
+            name = '{}-{:02d}'.format(beam['col1'], beam['col2'])
+            pos = SkyCoord(ra=beam['col3']*u.rad, dec=beam['col4']*u.rad)
+            beam['name'] = name
+            beam['pos'] = pos
 
     # Read the cube
     spec_cube = SpectralCube.read(cube)
@@ -779,21 +837,31 @@ def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, slab_s
     header = fits.getheader(cube)
 
     # Identify the target pixels for each spectrum
-    pix_pos = []
-    for source in bright_srcs:
-        pos = SkyCoord(ra=source['ra_deg_cont']*u.deg, dec=source['dec_deg_cont']*u.deg)
+    pix_pos_bright = []
+    pix_pos_beam = []
+    for idx, source in enumerate(bright_srcs):
+        pos = pos = bright_src_pos[idx]
         pixel = pos.to_pixel(wcs=wcs)
         rnd = np.round(pixel)
-        pix_pos.append((int(rnd[0]), int(rnd[1])))
+        pix_pos_bright.append((int(rnd[0]), int(rnd[1])))
+    for source in beams:
+        pos = source['pos']
+        pixel = pos.to_pixel(wcs=wcs)
+        rnd = np.round(pixel)
+        pix_pos_beam.append((int(rnd[0]), int(rnd[1])))
+
 
     # Extract the spectra
     start = time.time()
     print("  ## Started spectra extract at {} ##".format(
           (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start)))))
     prev = start
-    spectra = []
-    for p in pix_pos:
-        spectra.append(np.zeros(spec_len))
+    spectra_bright = []
+    for p in pix_pos_bright:
+        spectra_bright.append(np.zeros(spec_len))
+    spectra_beam = []
+    for p in pix_pos_beam:
+        spectra_beam.append(np.zeros(spec_len))
     
     # Extract using slabs
     unit = None
@@ -804,10 +872,13 @@ def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, slab_s
         print (slab)
         unit = slab.unit
 
-        for j, pos in enumerate(pix_pos):
+        for j, pos in enumerate(pix_pos_bright):
             data = slab[:,pos[0], pos[1]]
             #data = convert_data_to_jy(data, header)
-            spectra[j][i:max_idx] = data.value
+            spectra_bright[j][i:max_idx] = data.value
+        for j, pos in enumerate(pix_pos_beam):
+            data = slab[:,pos[0], pos[1]]
+            spectra_beam[j][i:max_idx] = data.value
         
         print ("Scanning slab of channels {} to {}, took {:.2f} s".format(i, max_idx-1, checkpoint-prev))
         prev = checkpoint
@@ -820,26 +891,30 @@ def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, slab_s
     names = bright_srcs['component_name']
     em_unit = str(vel_cube.unit)
     velocities = vel_cube.spectral_axis.to(u.km/u.s)
-    plot_overlaid_spectra(spectra, names, velocities, em_unit, 'km/s', figures_folder, os.path.basename(cube))
-    plot_all_spectra(spectra, names, velocities, em_unit, 'km/s', figures_folder)
+    plot_overlaid_spectra(spectra_bright, names, velocities, em_unit, 'km/s', figures_folder, os.path.basename(cube), 'bright')
+    plot_all_spectra(spectra_bright, names, velocities, em_unit, 'km/s', figures_folder, 'bright')
     bright_spectra_file = figures_folder+'/bright_spectra.html'
-    output_spectra_page(bright_spectra_file, './', "Spectra for 15 Brightest Sources")
+    output_spectra_page(bright_spectra_file, './bright', "Spectra for 15 Brightest Sources")
+    plot_overlaid_spectra(spectra_beam, beams['name'], velocities, em_unit, 'km/s', figures_folder, os.path.basename(cube), 'beam')
+    plot_all_spectra(spectra_beam, beams['name'], velocities, em_unit, 'km/s', figures_folder, 'beam')
+    beam_spectra_file = figures_folder+'/beam_spectra.html'
+    output_spectra_page(beam_spectra_file, './beam', "Spectra for centre of each beam")
 
     # Save the spectra
-    for idx, spec in enumerate(spectra):
+    for idx, spec in enumerate(spectra_bright):
         name = get_str(names[idx])
-        spec_table = Table(
-            [vel_cube.spectral_axis.to(u.km/u.s), spec*vel_cube.unit],
-            names=['Velocity', 'Emission'],
-            meta={'ID': name})
-        votable = from_table(spec_table)
-        writeto(votable, '{}/{}.vot'.format(spectra_folder, name))
+        pos = bright_src_pos[idx]
+        save_spectum(name, vel_cube.spectral_axis.to(u.km/u.s), spec*vel_cube.unit, pos.ra.deg, pos.dec.deg, spectra_folder)
+    for idx, spec in enumerate(spectra_beam):
+        name = beams[idx]['name']
+        pos = beams[idx]['pos']
+        save_spectum(name, vel_cube.spectral_axis.to(u.km/u.s), spec*vel_cube.unit, pos.ra.deg, pos.dec.deg, spectra_folder)
     
     # Check for periodicity in the spectra
     num_bright_periodic = 0
     bright_periodic = []
     detections = []
-    for idx, spec in enumerate(spectra):
+    for idx, spec in enumerate(spectra_bright):
         if spec.any():
             repeats, sig = identify_periodicity(spec)
             if len(repeats)>0:
@@ -857,8 +932,9 @@ def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, slab_s
     # Output the report
     cube_name = os.path.basename(cube)
     section = ReportSection('Spectra', cube_name)
-    section.add_item('Bright Source Spectra', link='figures/bright_spectra.html', image='figures/spectra_sml.png')
+    section.add_item('Bright Source Spectra', link='figures/bright_spectra.html', image='figures/bright-spectra_sml.png')
     section.add_item('Spectra wth periodic features', link='figures/periodic_spectra.html', value=bright_periodic_str)
+    section.add_item('Beam Centre Spectra', link='figures/beam_spectra.html', image='figures/beam-spectra_sml.png')
     reporter.add_section(section)
 
     metric = ValidationMetric('Spectra periodicity', 
@@ -911,8 +987,8 @@ def main():
         check_for_emission(args.cube, emission_vel_range[0], emission_vel_range[1], reporter, dest_folder, redo=args.redo)
         slab = check_for_non_emission(args.cube, non_emission_val_range[0], non_emission_val_range[1], reporter, dest_folder, redo=args.redo)
         measure_spectral_line_noise(slab, args.cube, non_emission_val_range[0], non_emission_val_range[1], reporter, dest_folder, redo=args.redo)
-        if args.source_cat:
-            extract_spectra(args.cube, args.source_cat, dest_folder, reporter, args.num_spectra)
+        if args.source_cat or args.beam_list:
+            extract_spectra(args.cube, args.source_cat, dest_folder, reporter, args.num_spectra, args.beam_list)
 
     if args.image:
         report_image_stats(args.image, args.noise, reporter, dest_folder, redo=args.redo)
