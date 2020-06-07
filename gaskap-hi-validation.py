@@ -27,6 +27,7 @@ from astropy.constants import k_B
 from astropy.coordinates import SkyCoord
 from astropy.io import ascii, fits
 from astropy.io.votable import parse, from_table, writeto
+from astropy.io.votable.tree import Info
 from astropy.table import Table, Column
 import astropy.units as u
 from astropy.wcs import WCS
@@ -37,6 +38,7 @@ from spectral_cube import SpectralCube
 from statsmodels.tsa import stattools
 from statsmodels.graphics.tsaplots import plot_pacf
 
+from validation import Spectra
 from validation_reporter import ValidationReport, ReportSection, ReportItem, ValidationMetric, output_html_report, output_metrics_xml
 
 
@@ -791,6 +793,9 @@ def save_spectum(name, velocities, fluxes, ra, dec, spectra_folder):
         names=['Velocity', 'Emission'],
         meta={'ID': name, 'RA' : ra, 'Dec': dec})
     votable = from_table(spec_table)
+    votable.infos.append(Info('RA', 'RA', ra))
+    votable.infos.append(Info('Dec', 'Dec', dec))
+
     writeto(votable, '{}/{}.vot'.format(spectra_folder, name))
 
 
@@ -865,19 +870,20 @@ def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, beam_l
     
     # Extract using slabs
     unit = None
+    prev = time.time()
     for i in range(0,spec_len,slab_size):
-        checkpoint = time.time()
         max_idx = min(i+slab_size, spec_len)
         slab = extract_channel_slab(cube, i, max_idx)
+        checkpoint = time.time()
         print (slab)
         unit = slab.unit
 
         for j, pos in enumerate(pix_pos_bright):
-            data = slab[:,pos[0], pos[1]]
+            data = slab[:,pos[1], pos[0]]
             #data = convert_data_to_jy(data, header)
             spectra_bright[j][i:max_idx] = data.value
         for j, pos in enumerate(pix_pos_beam):
-            data = slab[:,pos[0], pos[1]]
+            data = slab[:,pos[1], pos[0]]
             spectra_beam[j][i:max_idx] = data.value
         
         print ("Scanning slab of channels {} to {}, took {:.2f} s".format(i, max_idx-1, checkpoint-prev))
@@ -886,21 +892,9 @@ def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, beam_l
     end = time.time()
     print("  ## Finished spectra extract at {}, took {:.2f} s ##".format(
           time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end)), end-start))
-        
-    # Plot the spectra
-    names = bright_srcs['component_name']
-    em_unit = str(vel_cube.unit)
-    velocities = vel_cube.spectral_axis.to(u.km/u.s)
-    plot_overlaid_spectra(spectra_bright, names, velocities, em_unit, 'km/s', figures_folder, os.path.basename(cube), 'bright')
-    plot_all_spectra(spectra_bright, names, velocities, em_unit, 'km/s', figures_folder, 'bright')
-    bright_spectra_file = figures_folder+'/bright_spectra.html'
-    output_spectra_page(bright_spectra_file, './bright', "Spectra for 15 Brightest Sources")
-    plot_overlaid_spectra(spectra_beam, beams['name'], velocities, em_unit, 'km/s', figures_folder, os.path.basename(cube), 'beam')
-    plot_all_spectra(spectra_beam, beams['name'], velocities, em_unit, 'km/s', figures_folder, 'beam')
-    beam_spectra_file = figures_folder+'/beam_spectra.html'
-    output_spectra_page(beam_spectra_file, './beam', "Spectra for centre of each beam")
 
     # Save the spectra
+    names = bright_srcs['component_name']
     for idx, spec in enumerate(spectra_bright):
         name = get_str(names[idx])
         pos = bright_src_pos[idx]
@@ -909,6 +903,25 @@ def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, beam_l
         name = beams[idx]['name']
         pos = beams[idx]['pos']
         save_spectum(name, vel_cube.spectral_axis.to(u.km/u.s), spec*vel_cube.unit, pos.ra.deg, pos.dec.deg, spectra_folder)
+        
+    # Plot the spectra
+    em_unit = str(vel_cube.unit)
+    velocities = vel_cube.spectral_axis.to(u.km/u.s)
+    plot_overlaid_spectra(spectra_bright, names, velocities, em_unit, 'km/s', figures_folder, os.path.basename(cube), 'bright')
+    plot_all_spectra(spectra_bright, names, velocities, em_unit, 'km/s', figures_folder, 'bright')
+    bright_spectra_file = figures_folder+'/bright_spectra.html'
+    output_spectra_page(bright_spectra_file, './bright', "Spectra for 15 Brightest Sources")
+    if beam_list:
+        beam_names = beams['name']
+        spec_res_hz = Spectra.get_spec_resolution(header)
+        print ('Spec res (hz) {}'.format(spec_res_hz))
+        theoretical_noise = calc_theoretical_rms(spec_res_hz)
+        print ('Theoretical noise (mJy) {}'.format(theoretical_noise))
+        plot_overlaid_spectra(spectra_beam, beam_names, velocities, em_unit, 'km/s', figures_folder, os.path.basename(cube), 'beam')
+        Spectra.plot_beam_locs(cube, beams, theoretical_noise, figures_folder+'/beam_comparison', spectra_folder)
+        plot_all_spectra(spectra_beam, beam_names, velocities, em_unit, 'km/s', figures_folder, 'beam')
+        beam_spectra_file = figures_folder+'/beam_spectra.html'
+        output_spectra_page(beam_spectra_file, './beam', "Spectra for centre of each beam")
     
     # Check for periodicity in the spectra
     num_bright_periodic = 0
@@ -934,7 +947,9 @@ def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, beam_l
     section = ReportSection('Spectra', cube_name)
     section.add_item('Bright Source Spectra', link='figures/bright_spectra.html', image='figures/bright-spectra_sml.png')
     section.add_item('Spectra wth periodic features', link='figures/periodic_spectra.html', value=bright_periodic_str)
-    section.add_item('Beam Centre Spectra', link='figures/beam_spectra.html', image='figures/beam-spectra_sml.png')
+    if beam_list:
+        section.add_item('Beam Centre Spectra', link='figures/beam_spectra.html', image='figures/beam-spectra_sml.png')
+        section.add_item('Beam Noise Levels', link='figures/beam_comparison.png', image='figures/beam_comparison_sml.png')
     reporter.add_section(section)
 
     metric = ValidationMetric('Spectra periodicity', 
