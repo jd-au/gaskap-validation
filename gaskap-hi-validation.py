@@ -18,6 +18,7 @@ import os
 import re
 from string import Template
 import time
+import warnings
 
 import matplotlib
 matplotlib.use('agg')
@@ -30,6 +31,7 @@ from astropy.io.votable import parse, from_table, writeto
 from astropy.io.votable.tree import Info
 from astropy.table import Table, Column
 import astropy.units as u
+from astropy.utils.exceptions import AstropyWarning
 from astropy.wcs import WCS
 import matplotlib.pyplot as plt
 import numpy as np
@@ -38,7 +40,7 @@ from spectral_cube import SpectralCube
 from statsmodels.tsa import stattools
 from statsmodels.graphics.tsaplots import plot_pacf
 
-from validation import Spectra
+from validation import Diagnostics, Spectra
 from validation_reporter import ValidationReport, ReportSection, ReportItem, ValidationMetric, output_html_report, output_metrics_xml
 
 
@@ -959,10 +961,75 @@ def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, beam_l
     reporter.add_metric(metric)
 
 
+def report_diagnostics(diagnostics_dir, dest_folder, reporter):
+    print('\nReporting diagnostics')
+
+    fig_folder= get_figures_folder(dest_folder)
+
+    # Extract metadata
+    cal_sbid = Diagnostics.find_cal_sbid(diagnostics_dir)
+    chan_width, cfreq, nchan = Diagnostics.get_freq_details(diagnostics_dir)
+    chan_width_kHz = round(chan_width/1000., 3) # convert Hz to kHz
+    n_ant, start_obs_date, end_obs_date, tobs, field, ra, dec, total_obs_bw = Diagnostics.get_metadata(diagnostics_dir)
+    theoretical_rms_mjy = calc_theoretical_rms(chan_width, t_obs=tobs)
+
+    # Extract flagging details
+    flag_stat_beams, n_flag_ant_beams, ant_flagged_in_all, pct_inner_base_flagged, pct_outer_base_flagged, pct_integ_flagged = Diagnostics.get_flagging_stats(
+        diagnostics_dir, fig_folder)
+    print ("Antenna flagged in all:", ant_flagged_in_all)
+    flagged_ant_desc = ", ".join(ant_flagged_in_all) if len(ant_flagged_in_all) > 0 else 'None'
+
+    # Extract beam RMS
+    beam_exp_rms = Diagnostics.calc_beam_exp_rms(flag_stat_beams, theoretical_rms_mjy)
+
+    # Plot beam stats
+    beam_nums = Diagnostics.get_beam_numbers_closepack()
+
+    flagged_vis_fig = Diagnostics.plot_flag_stat(flag_stat_beams, beam_nums, fig_folder, closepack=True)
+    flagged_vis_thumb, flagged_vis_thumb_rel = Diagnostics.make_thumbnail(flagged_vis_fig, fig_folder, dest_folder)
+    flagged_vis_fig_rel = os.path.relpath(flagged_vis_fig, dest_folder)
+
+    flagged_ant_fig = Diagnostics.plot_flag_ant(n_flag_ant_beams, beam_nums, fig_folder, closepack=True)
+    flagged_ant_thumb, flagged_ant_thumb_rel = Diagnostics.make_thumbnail(flagged_vis_fig, fig_folder, dest_folder)
+    flagged_ant_fig_rel = os.path.relpath(flagged_ant_fig, dest_folder)
+
+    beam_exp_rms_fig = Diagnostics.plot_beam_exp_rms(beam_exp_rms, beam_nums, fig_folder, closepack=True)
+    beam_exp_rms_thumb, beam_exp_rms_thumb_rel = Diagnostics.make_thumbnail(beam_exp_rms_fig, fig_folder, dest_folder)
+    beam_exp_rms_fig_rel = os.path.relpath(beam_exp_rms_fig, dest_folder)
+
+
+    # Output the report
+    section = ReportSection('Diagnostics', '')
+    section.add_item('Cal SBID', cal_sbid)
+    section.add_item('Completely Flagged Antennas', flagged_ant_desc)    
+    section.add_item('Integrations Completely Flagged (%)', pct_integ_flagged)
+    section.add_item('Short Baselines Flagged (%)', pct_inner_base_flagged)
+    section.add_item('Long Baselines Flagged (%)', pct_outer_base_flagged)
+    section.add_item('Channel Width (kHz)', chan_width_kHz)
+    section.add_item('Flagged Visibilities', link=flagged_vis_fig_rel, image=flagged_vis_thumb_rel)
+    section.add_item('Flagged Antennas', link=flagged_ant_fig_rel, image=flagged_ant_thumb_rel)
+    section.add_item('Expected RMS per channel', link=beam_exp_rms_fig_rel, image=beam_exp_rms_thumb_rel)
+    reporter.add_section(section)
+
+    metric = ValidationMetric('Flagged Short Baselines', 
+        'Percent of short baselines (between the inner 6 antennae) flagged across all integrations and all beams',
+        pct_inner_base_flagged, assess_metric(pct_inner_base_flagged, 
+        15, 30, low_good=True))
+    reporter.add_metric(metric)
+    metric = ValidationMetric('Flagged Long Baselines', 
+        'Percent of long baselines (between the outer 6 antennae) flagged across all integrations and all beams',
+        pct_outer_base_flagged, assess_metric(pct_outer_base_flagged, 
+        30, 45, low_good=True))
+    reporter.add_metric(metric)
+
+
 def main():
     start = time.time()
     print("#### Started validation at {} ####".format(
           (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start)))))
+
+    #ignore astropy warnings 
+    warnings.simplefilter('ignore', AstropyWarning)   
 
     # Parse command line options
     args = parseargs()
@@ -1007,6 +1074,10 @@ def main():
 
     if args.image:
         report_image_stats(args.image, args.noise, reporter, dest_folder, redo=args.redo)
+
+    diagnostics_dir = Diagnostics.find_diagnostics_dir(args.cube, args.image)
+    if diagnostics_dir:
+        report_diagnostics(diagnostics_dir, dest_folder, reporter)
 
     print ('\nProducing report to', dest_folder)
     output_html_report(reporter, dest_folder)

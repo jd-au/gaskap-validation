@@ -73,10 +73,11 @@ def _output_metrics(f, reporter):
     _output_report_table_header(f, 'GASKAP HI Validation Metrics')
     f.write('\n<tr>')
     for metric in reporter.metrics:
-        f.write('\n<th>{}</th>'.format(metric.title))
+        f.write('\n<th title="{}">{}</th>'.format(metric.description, metric.title))
     f.write('\n</tr>\n<tr>')
     for metric in reporter.metrics:
-        f.write('\n<td class={}>{}</td>'.format(_get_metric_class_name(metric.status), round(metric.value, 3)))
+        f.write('\n<td class={} title="{}">{}</td>'.format(_get_metric_class_name(metric.status), metric.description, 
+            round(metric.value, 3)))
     f.write('\n</tr>\n<table>')
     return
 
