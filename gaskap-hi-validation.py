@@ -974,10 +974,11 @@ def report_diagnostics(diagnostics_dir, dest_folder, reporter):
     theoretical_rms_mjy = calc_theoretical_rms(chan_width, t_obs=tobs)
 
     # Extract flagging details
-    flag_stat_beams, n_flag_ant_beams, ant_flagged_in_all, pct_inner_base_flagged, pct_outer_base_flagged, pct_integ_flagged = Diagnostics.get_flagging_stats(
+    flag_stat_beams, n_flag_ant_beams, ant_flagged_in_all, pct_integ_flagged, baseline_flag_pct = Diagnostics.get_flagging_stats(
         diagnostics_dir, fig_folder)
     print ("Antenna flagged in all:", ant_flagged_in_all)
     flagged_ant_desc = ", ".join(ant_flagged_in_all) if len(ant_flagged_in_all) > 0 else 'None'
+    pct_short_base_flagged, pct_medium_base_flagged, pct_long_base_flagged = Diagnostics.calc_flag_percent(baseline_flag_pct)
 
     # Extract beam RMS
     beam_exp_rms = Diagnostics.calc_beam_exp_rms(flag_stat_beams, theoretical_rms_mjy)
@@ -997,14 +998,19 @@ def report_diagnostics(diagnostics_dir, dest_folder, reporter):
     beam_exp_rms_thumb, beam_exp_rms_thumb_rel = Diagnostics.make_thumbnail(beam_exp_rms_fig, fig_folder, dest_folder)
     beam_exp_rms_fig_rel = os.path.relpath(beam_exp_rms_fig, dest_folder)
 
+    baseline_fig = Diagnostics.plot_baselines(baseline_flag_pct, fig_folder)
+    baseline_thumb, baseline_thumb_rel = Diagnostics.make_thumbnail(baseline_fig, fig_folder, dest_folder)
+    baseline_fig_rel = os.path.relpath(baseline_fig, dest_folder)
 
     # Output the report
     section = ReportSection('Diagnostics', '')
     section.add_item('Cal SBID', cal_sbid)
     section.add_item('Completely Flagged Antennas', flagged_ant_desc)    
-    section.add_item('Integrations Completely Flagged (%)', pct_integ_flagged)
-    section.add_item('Short Baselines Flagged (%)', pct_inner_base_flagged)
-    section.add_item('Long Baselines Flagged (%)', pct_outer_base_flagged)
+    section.add_item('Integrations Completely<br/>Flagged (%)', pct_integ_flagged)
+    section.add_item('Short Baselines<br/>Flagged (%)', pct_short_base_flagged)
+    section.add_item('Medium Baselines<br/>Flagged (%)', pct_medium_base_flagged)
+    section.add_item('Long Baselines<br/>Flagged (%)', pct_long_base_flagged)
+    section.add_item('Baselines', link=baseline_fig_rel, image=baseline_thumb_rel)
     section.add_item('Channel Width (kHz)', chan_width_kHz)
     section.add_item('Flagged Visibilities', link=flagged_vis_fig_rel, image=flagged_vis_thumb_rel)
     section.add_item('Flagged Antennas', link=flagged_ant_fig_rel, image=flagged_ant_thumb_rel)
@@ -1012,13 +1018,13 @@ def report_diagnostics(diagnostics_dir, dest_folder, reporter):
     reporter.add_section(section)
 
     metric = ValidationMetric('Flagged Short Baselines', 
-        'Percent of short baselines (between the inner 6 antennae) flagged across all integrations and all beams',
-        pct_inner_base_flagged, assess_metric(pct_inner_base_flagged, 
+        'Percent of short baselines (500m or less) flagged across all integrations and all beams',
+        pct_short_base_flagged, assess_metric(pct_short_base_flagged, 
         15, 30, low_good=True))
     reporter.add_metric(metric)
     metric = ValidationMetric('Flagged Long Baselines', 
-        'Percent of long baselines (between the outer 6 antennae) flagged across all integrations and all beams',
-        pct_outer_base_flagged, assess_metric(pct_outer_base_flagged, 
+        'Percent of long baselines (4000m or more) flagged across all integrations and all beams',
+        pct_long_base_flagged, assess_metric(pct_long_base_flagged, 
         30, 45, low_good=True))
     reporter.add_metric(metric)
 

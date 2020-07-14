@@ -5,15 +5,17 @@
 # Author James Dempsey
 # Date 1 Jul 2020
 
+import csv
 import glob
 import os
 import math
 
+from astropy.table import Table
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MultipleLocator, FormatStrFormatter
 import numpy as np
 from PIL import Image
-
 
 def find_subdir(cube, image, name):
     potential_parent_dirs = []
@@ -194,6 +196,10 @@ def get_metadata(diagnostics_dir, verbose=False):
     return n_ant, start_obs_date, end_obs_date, tobs, field, ra, dec, total_obs_bw
 
 
+def _read_baselines():
+    baselines = Table.read('baselines.csv', format='ascii.csv', names=('index', 'name', 'length'))
+    return baselines
+
 def _get_flagging_key_values(flagging_file):
     """
     Getting Flagging Key Values. 
@@ -221,7 +227,14 @@ def _get_flagging_key_values(flagging_file):
     return n_Rec, n_Chan, exp_count
 
 
-def _get_flagging(flagging_file, flag_ant_file, num_integ, n_chan):
+def _build_baseline_index(baseline_names):
+    baseidx = {}
+    for idx, name in enumerate(baseline_names):
+        baseidx[name] = idx
+    return baseidx
+
+
+def _get_flagging(flagging_file, flag_ant_file, num_integ, n_chan, baseline_names):
     """
     Getting flagging statistics and finding out beam-by-beam antenna based (completely) flagging. 
     """
@@ -229,12 +242,14 @@ def _get_flagging(flagging_file, flag_ant_file, num_integ, n_chan):
     # Inner: 1-6
     # Mid: 7-30
     # Outer: 31 - 36
+    base_idx_map = _build_baseline_index(baseline_names)
 
     # Finding out which antenna has been flagged completely.
     all_ant1, all_ant2, all_flag = [], [], []
-    num_inner, flag_inner, num_outer, flag_outer = 0, 0, 0, 0
+    baseline_count, baseline_flag = np.zeros((len(baseline_names))), np.zeros((len(baseline_names)))
     integ_ant1, integ_ant2, integ_flag = [], [], []
     integ_num_inner, integ_flag_inner, integ_num_outer, integ_flag_outer = 0, 0, 0, 0
+    integ_baseline_count, integ_baseline_flag = np.zeros((len(baseline_names))), np.zeros((len(baseline_names)))
     num_integ_flagged = 0
     with open(flagging_file, 'r') as f:
         for line in f:
@@ -244,16 +259,17 @@ def _get_flagging(flagging_file, flag_ant_file, num_integ, n_chan):
                     ant1 = int(tokens[3])
                     ant2 = int(tokens[4])
                     flag = float(tokens[6])
-                    if (ant1 < ant2) and (flag == 100): # extract non-correlated antenna pairs with 100 percent flagging
+                    if (ant1 < ant2) and (flag == 100): 
+                        # extract non-correlated antenna pairs with 100 percent flagging
                         integ_ant1.append(ant1)
                         integ_ant2.append(ant2)
                         integ_flag.append(flag)
-                    if (ant1 < 6) and (ant2 < 6) and (ant1 != ant2):
-                        integ_num_inner += 1
-                        integ_flag_inner += flag
-                    if (ant1 >= 30) and (ant2 >= 30) and (ant1 != ant2):
-                        integ_num_outer += 1
-                        integ_flag_outer += flag
+                    if ant1 < ant2:
+                        # Record flagging for each baseline
+                        base_name = '{}-{}'.format(ant1+1, ant2+1)
+                        base_idx = base_idx_map[base_name]
+                        integ_baseline_count[base_idx] += 1
+                        integ_baseline_flag[base_idx] += flag
             elif "# Integration Number:" in line:
                 tokens = line.split()
                 integ_num = int(tokens[3])
@@ -265,13 +281,11 @@ def _get_flagging(flagging_file, flag_ant_file, num_integ, n_chan):
                     all_ant1.extend(integ_ant1)
                     all_ant2.extend(integ_ant2)
                     all_flag.extend(integ_flag)
-                    num_inner += integ_num_inner
-                    flag_inner += integ_flag_inner
-                    num_outer += integ_num_outer
-                    flag_outer += integ_flag_outer
+                    baseline_count += integ_baseline_count
+                    baseline_flag += integ_baseline_flag
                 # Reset the integration details ready for the enxt integration (if any)
                 integ_ant1, integ_ant2, integ_flag = [], [], []
-                integ_num_inner, integ_flag_inner, integ_num_outer, integ_flag_outer = 0, 0, 0, 0
+                integ_baseline_count, integ_baseline_flag = np.zeros((len(baseline_names))), np.zeros((len(baseline_names)))
 
 
     last_line = line
@@ -303,9 +317,8 @@ def _get_flagging(flagging_file, flag_ant_file, num_integ, n_chan):
             ffile.write('\n none \n')
         ffile.write('\n')
     
-    flag_pct_inner = 0 if num_inner == 0 else flag_inner / num_inner
-    flag_pct_outer = 0 if num_outer == 0 else flag_outer / num_outer
     flag_pct_integ = 0 if num_integ == 0 else 100* num_integ_flagged / num_integ
+    baseline_flag_pct = baseline_flag / baseline_count
 
     # Getting data flagged percentage from the last line of the summary
     str_line = last_line
@@ -317,7 +330,7 @@ def _get_flagging(flagging_file, flag_ant_file, num_integ, n_chan):
     autocorr_flagged_pct = (36 * num_integ * n_chan / total_uv)*100.0
     data_flagged_pct = round(total_flagged_pct - autocorr_flagged_pct, 3)
 
-    return data_flagged_pct, total_flagged_ant, flag_ant_file, ant_names, flag_pct_inner, flag_pct_outer, flag_pct_integ
+    return data_flagged_pct, total_flagged_ant, flag_ant_file, ant_names, flag_pct_integ, baseline_flag_pct
 
 
 def get_flagging_stats(diagnostics_dir, fig_folder, verbose=False):
@@ -328,13 +341,16 @@ def get_flagging_stats(diagnostics_dir, fig_folder, verbose=False):
     ----------
     diagnostics_dir: path
         Path to the diagnostics dir, the metadata dir is assumed to b a sibling of this directory.
+    fig_folder: string
+        Path to the folder we should put any plots or reports in.
     verbose: boolean
         True if extra output is needed.
 
     Returns
     -------
-    The list of antennas that are flagged in all beams, the percent of sort baseline integrations flagged, 
-    the percent of long baseline integrations flagged.
+    The flagging percentage for each beam, the number of antenna fully flaged in each beam, 
+    the list of antennas that are flagged in all beams, the percent of integrations fully flagged, and
+    the percent fo each baseline flagged.
     """
     flagging_dir = find_flagging_summary_dir(diagnostics_dir)
     if flagging_dir is None:
@@ -342,9 +358,11 @@ def get_flagging_stats(diagnostics_dir, fig_folder, verbose=False):
             print("Unable to find Flagging Summary files.")
             return None
 
+    baselines = _read_baselines()
+    baseline_names = baselines['name'].data
     flagging_files = sorted(glob.glob(flagging_dir+'/*_SL.ms.flagSummary'))
 
-    flag_stat_beams, n_flag_ant_beams, flag_inner_beams, flag_outer_beams, flag_integ = [], [], [], [], []
+    flag_stat_beams, n_flag_ant_beams, flag_integ = [], [], []
 
     flag_ant_file = fig_folder +'/flagged_antenna.txt'
 
@@ -355,15 +373,17 @@ def get_flagging_stats(diagnostics_dir, fig_folder, verbose=False):
         print ("Num flagging files:", len(flagging_files))
 
     ant_flagged_in_all = None
+    flag_baseline = np.zeros((len(baselines['name'])))
+    unflagged_beam_count = 0
     for ffile in flagging_files:
         n_rec, n_chan, exp_count = _get_flagging_key_values(ffile)
-        flag_stat, n_flag_ant, flag_ant_file, flagged_ant, pct_flag_inner, pct_flag_outer, pct_integ_flagged = _get_flagging(ffile, flag_ant_file, n_rec, n_chan)
+        flag_stat, n_flag_ant, flag_ant_file, flagged_ant, pct_integ_flagged, baseline_flag_pct = _get_flagging(ffile, flag_ant_file, n_rec, n_chan, baseline_names)
         flag_stat_beams.append(flag_stat)
         n_flag_ant_beams.append(n_flag_ant)
         flag_integ.append(pct_integ_flagged)
         if pct_integ_flagged < 100:
-            flag_inner_beams.append(pct_flag_inner)
-            flag_outer_beams.append(pct_flag_outer)
+            flag_baseline += baseline_flag_pct
+            unflagged_beam_count += 1
         if ant_flagged_in_all == None:
             ant_flagged_in_all = flagged_ant
         else:
@@ -371,12 +391,11 @@ def get_flagging_stats(diagnostics_dir, fig_folder, verbose=False):
                 if ant not in flagged_ant:
                     ant_flagged_in_all.remove(ant)
 
-    pct_inner_base_flagged = round(np.mean(flag_inner_beams),1)
-    pct_outer_base_flagged = round(np.mean(flag_outer_beams),1)
     pct_integ_flagged = round(np.mean(flag_integ),1)
+    pct_baseline_flagged = flag_baseline / unflagged_beam_count
     print ("Flagged integrations", flag_integ)
 
-    return flag_stat_beams, n_flag_ant_beams, ant_flagged_in_all, pct_inner_base_flagged, pct_outer_base_flagged, pct_integ_flagged
+    return flag_stat_beams, n_flag_ant_beams, ant_flagged_in_all, pct_integ_flagged, pct_baseline_flagged
 
 
 def calc_beam_exp_rms(flag_stat_beams, theoretical_rms_mjy):
@@ -389,6 +408,7 @@ def calc_beam_exp_rms(flag_stat_beams, theoretical_rms_mjy):
     beam_exp_rms = 1/np.sqrt(1.0 - stats/100.0)*theoretical_rms_mjy
     
     return beam_exp_rms
+
 
 def beam_positions(closepack=False):
     """
@@ -600,3 +620,94 @@ def plot_beam_exp_rms(beam_exp_rms, beam_nums, fig_folder, closepack=False):
     print (saved_fig, plot_name)
 
     return saved_fig
+
+
+def plot_baselines(baseline_flag_pct, fig_folder, short_len=500, long_len=4000):
+    """
+    Plot a histogram of the ASKAP baselines by length overlaid with the fraction unflagged and flagged at each length bin.
+
+    Parameters
+    ----------
+    baseline_flag_pct: ndarray
+        Array of flagging percentages for each baseline.
+    fig_folder: string
+        Path to the folder we should put the plot in.
+    short_len: float
+        Upper limit of the length of a 'short' baseline.
+    long_len: float
+        Lower limit of the length of a 'long' baseline.
+
+    Returns
+    -------
+    The path to the saved plot.
+    """
+    baselines = _read_baselines()
+
+    majorYLocFactor = 5
+    minorYLocFactor = majorYLocFactor/5
+    majorXLocFactor = 1000
+    minorXLocFactor = majorXLocFactor/4
+
+    majorYLocator = MultipleLocator(majorYLocFactor)
+    majorYFormatter = FormatStrFormatter('%d')
+    minorYLocator = MultipleLocator(minorYLocFactor)
+    majorXLocator = MultipleLocator(majorXLocFactor)
+    majorXFormatter = FormatStrFormatter('%d')
+    minorXLocator = MultipleLocator(minorXLocFactor)
+
+
+    fig, ax = plt.subplots(figsize=(9.6, 7.2))
+    x_range = [np.min(baselines['length']), np.max(baselines['length'])]
+    ax.hist(baselines['length'], histtype = 'stepfilled', bins = 100, range = x_range, alpha = 0.5, #color = tableau20[2], 
+            label = 'ASKAP-36', edgecolor = 'black')
+    ax.hist(baselines['length'], weights = (1-baseline_flag_pct/100), histtype = 'stepfilled', bins = 100, range = x_range, alpha = 0.5, #color = tableau20[0], 
+            label = 'Unflagged', edgecolor = 'black')
+    ax.hist(baselines['length'], weights = baseline_flag_pct/100, histtype = 'step', bins = 100, range = x_range, 
+            ls = 'dashed', fill = False, color = 'black', label = 'Flagged')
+
+    plt.axvline(x=short_len, ls = ':', color='grey')
+    plt.axvline(x=long_len, ls = ':', color='grey')
+
+    ax.yaxis.set_major_locator(majorYLocator)
+    ax.yaxis.set_major_formatter(majorYFormatter)
+    ax.yaxis.set_minor_locator(minorYLocator)
+    ax.xaxis.set_major_locator(majorXLocator)
+    ax.xaxis.set_major_formatter(majorXFormatter)
+    ax.xaxis.set_minor_locator(minorXLocator)
+
+    ax.set_xlabel(r'UV Distance [m]')
+    ax.set_ylabel(r'Baselines')
+    plt.legend(loc=0, fontsize=8)
+    saved_fig = fig_folder+'/baselines.png'
+    plt.savefig(saved_fig, bbox_inches='tight')
+    plt.close()
+    print (saved_fig)
+
+    return saved_fig
+
+
+def calc_flag_percent(baseline_flag_pct, short_len=500, long_len=4000):
+    """
+    Calculate the fraction of short and long baseline integrations flagged.
+
+    Parameters
+    ----------
+    baseline_flag_pct: ndarray
+        Array of flagging percentages for each baseline.
+    short_len: float
+        Upper limit of the length of a 'short' baseline.
+    long_len: float
+        Lower limit of the length of a 'long' baseline.
+
+    Returns
+    -------
+    The percent of short, medium and long baseline integrations flagged.
+    """
+    baselines = _read_baselines()
+    short_baselines = baselines['length'] <= short_len
+    short_base_flag_pct = round(np.mean(baseline_flag_pct[short_baselines]),1)
+    long_baselines = baselines['length'] >= long_len
+    long_base_flag_pct = round(np.mean(baseline_flag_pct[long_baselines]),1)
+    mid_baselines = (baselines['length'] > short_len) & (baselines['length'] < long_len)
+    mid_base_flag_pct = round(np.mean(baseline_flag_pct[mid_baselines]),1)
+    return short_base_flag_pct, mid_base_flag_pct, long_base_flag_pct
