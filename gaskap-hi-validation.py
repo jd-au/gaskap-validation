@@ -961,7 +961,7 @@ def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, beam_l
     reporter.add_metric(metric)
 
 
-def report_diagnostics(diagnostics_dir, dest_folder, reporter):
+def report_diagnostics(diagnostics_dir, dest_folder, reporter, short_len=500, long_len=4000):
     print('\nReporting diagnostics')
 
     fig_folder= get_figures_folder(dest_folder)
@@ -978,7 +978,8 @@ def report_diagnostics(diagnostics_dir, dest_folder, reporter):
         diagnostics_dir, fig_folder)
     print ("Antenna flagged in all:", ant_flagged_in_all)
     flagged_ant_desc = ", ".join(ant_flagged_in_all) if len(ant_flagged_in_all) > 0 else 'None'
-    pct_short_base_flagged, pct_medium_base_flagged, pct_long_base_flagged = Diagnostics.calc_flag_percent(baseline_flag_pct)
+    pct_short_base_flagged, pct_medium_base_flagged, pct_long_base_flagged = Diagnostics.calc_flag_percent(
+        baseline_flag_pct, short_len=short_len, long_len=long_len)
 
     # Extract beam RMS
     beam_exp_rms = Diagnostics.calc_beam_exp_rms(flag_stat_beams, theoretical_rms_mjy)
@@ -998,7 +999,7 @@ def report_diagnostics(diagnostics_dir, dest_folder, reporter):
     beam_exp_rms_thumb, beam_exp_rms_thumb_rel = Diagnostics.make_thumbnail(beam_exp_rms_fig, fig_folder, dest_folder)
     beam_exp_rms_fig_rel = os.path.relpath(beam_exp_rms_fig, dest_folder)
 
-    baseline_fig = Diagnostics.plot_baselines(baseline_flag_pct, fig_folder)
+    baseline_fig = Diagnostics.plot_baselines(baseline_flag_pct, fig_folder, short_len=short_len, long_len=long_len)
     baseline_thumb, baseline_thumb_rel = Diagnostics.make_thumbnail(baseline_fig, fig_folder, dest_folder)
     baseline_fig_rel = os.path.relpath(baseline_fig, dest_folder)
 
@@ -1018,12 +1019,12 @@ def report_diagnostics(diagnostics_dir, dest_folder, reporter):
     reporter.add_section(section)
 
     metric = ValidationMetric('Flagged Short Baselines', 
-        'Percent of short baselines (500m or less) flagged across all integrations and all beams',
+        'Percent of short baselines ({}m or less) flagged across all integrations and all beams'.format(short_len),
         pct_short_base_flagged, assess_metric(pct_short_base_flagged, 
         15, 30, low_good=True))
     reporter.add_metric(metric)
     metric = ValidationMetric('Flagged Long Baselines', 
-        'Percent of long baselines (4000m or more) flagged across all integrations and all beams',
+        'Percent of long baselines ({}m or more) flagged across all integrations and all beams'.format(long_len),
         pct_long_base_flagged, assess_metric(pct_long_base_flagged, 
         30, 45, low_good=True))
     reporter.add_metric(metric)

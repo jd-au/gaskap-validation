@@ -197,7 +197,7 @@ def get_metadata(diagnostics_dir, verbose=False):
 
 
 def _read_baselines():
-    baselines = Table.read('baselines.csv', format='ascii.csv', names=('index', 'name', 'length'))
+    baselines = Table.read('reference/baselines.csv', format='ascii.csv', names=('index', 'name', 'length'))
     return baselines
 
 def _get_flagging_key_values(flagging_file):
