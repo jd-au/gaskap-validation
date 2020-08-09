@@ -403,7 +403,7 @@ def check_for_emission(cube, vel_start, vel_end, reporter, dest_folder, ncores=8
 
     metric = ValidationMetric('Presence of Emission', 
         'Maximum large scale emission intensity in the velocity range where emission is expected.',
-        max_em, assess_metric(max_em, 800, 1000))
+        int(max_em), assess_metric(max_em, 800, 1000))
     reporter.add_metric(metric)
     return
 
@@ -449,7 +449,7 @@ def check_for_non_emission(cube, vel_start, vel_end, reporter, dest_folder, ncor
 
     metric = ValidationMetric('Absence of Off-line Emission', 
         'Maximum large scale emission intensity in the velocity range where emission is not expected.',
-        max_em, assess_metric(max_em, 200, 500, low_good=True))
+        int(max_em), assess_metric(max_em, 200, 500, low_good=True))
     reporter.add_metric(metric)
     return slab
 
