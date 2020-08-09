@@ -66,6 +66,7 @@ def parseargs():
     parser.add_argument("-i", "--image", required=False, help="The continuum image to be checked.")
     parser.add_argument("-s", "--source_cat", required=False, help="The selavy source catalogue used for source identification.")
     parser.add_argument("-b", "--beam_list", required=False, help="The csv file describing the positions of each beam (in radians).")
+    parser.add_argument("-d", "--duration", required=False, help="The duration of the observation in hours.", type=float, default=12.0)
 
     parser.add_argument("-o", "--output", help="The folder in which to save the validation report and associated figures.", default='report')
 
@@ -267,7 +268,7 @@ def get_spectral_units(ctype, cunit, hdr):
     return spectral_unit, spectral_conversion
 
 
-def report_observation(image, reporter):
+def report_observation(image, reporter, input_duration):
     hdr = fits.getheader(image)
     w = WCS(hdr).celestial
 
@@ -278,7 +279,7 @@ def report_observation(image, reporter):
         proj_link = "https://confluence.csiro.au/display/askapsst/{0}+Data".format(project)
 
     date = hdr['DATE-OBS']
-    duration = float(hdr['DURATION'])/3600 if 'DURATION' in hdr else 0
+    duration = float(hdr['DURATION'])/3600 if 'DURATION' in hdr else input_duration
 
     naxis1 = int(hdr['NAXIS1'])
     naxis2 = int(hdr['NAXIS2'])
@@ -482,7 +483,7 @@ def calc_theoretical_rms(chan_width, t_obs= 12*60*60, n_ant=36):
 
 
 
-def measure_spectral_line_noise(slab, cube, vel_start, vel_end, reporter, dest_folder, redo=False):
+def measure_spectral_line_noise(slab, cube, vel_start, vel_end, reporter, dest_folder, duration, redo=False):
     print ('\nMeasuring the spectral line noise levels across {:.0f} < v < {:.0f}'.format(vel_start, vel_end))
 
     if slab is None:
@@ -531,7 +532,7 @@ def measure_spectral_line_noise(slab, cube, vel_start, vel_end, reporter, dest_f
     median_noise_5kHz = median_noise / np.sqrt(1 / spec_res_km_s)
     median_noise_5kHz *= 1000 # Jy => mJy
 
-    theoretical_gaskap_noise = calc_theoretical_rms(5000) # mJy per 5 kHz for 12 hr observation
+    theoretical_gaskap_noise = calc_theoretical_rms(5000, t_obs=duration*60*60) # mJy per 5 kHz for the observation duration
     median_ratio = median_noise_5kHz / theoretical_gaskap_noise
 
     # assess
@@ -543,12 +544,12 @@ def measure_spectral_line_noise(slab, cube, vel_start, vel_end, reporter, dest_f
     section.add_item('Spectral Axis<br/>Noise Map', link='figures/'+prefix+'.png', image='figures/'+prefix+'_sml.png')
     section.add_item('Spectral Axis<br/>Noise Histogram', link='figures/'+prefix+'_hist.png', image='figures/'+prefix+'_hist_sml.png')
     section.add_item('Spectral Axis Noise<br/>(mJy per 5 kHz)', value='{:.3f}'.format(median_noise_5kHz))
-    section.add_item('Spectral Axis Noise<br/>(vs theoretical)', value='{:.3f}'.format(median_ratio))
+    section.add_item('Spectral Axis Noise<br/>(vs theoretical for {:.2f} hr)'.format(duration), value='{:.3f}'.format(median_ratio))
     reporter.add_section(section)
 
     metric = ValidationMetric('Spectral Noise', 
-        '1-sigma spectral noise comparison to theoretical per 5 kHz channel.',
-        median_ratio, assess_metric(median_ratio, 
+        '1-sigma spectral noise comparison to theoretical per 5 kHz channel for {:.2f} hr observation.'.format(duration),
+        round(median_ratio,3), assess_metric(median_ratio, 
         np.sqrt(2), np.sqrt(2)*2, low_good=True))
     reporter.add_metric(metric)
 
@@ -1079,14 +1080,14 @@ def main():
         obs_img = args.image
     cube_name = os.path.basename(obs_img)
     reporter = ValidationReport('GASKAP Validation Report: {}'.format(cube_name))
-    report_observation(obs_img, reporter)
+    report_observation(obs_img, reporter, args.duration)
 
     if args.cube:
         report_cube_stats(args.cube, reporter)
 
         check_for_emission(args.cube, emission_vel_range[0], emission_vel_range[1], reporter, dest_folder, redo=args.redo)
         slab = check_for_non_emission(args.cube, non_emission_val_range[0], non_emission_val_range[1], reporter, dest_folder, redo=args.redo)
-        measure_spectral_line_noise(slab, args.cube, non_emission_val_range[0], non_emission_val_range[1], reporter, dest_folder, redo=args.redo)
+        measure_spectral_line_noise(slab, args.cube, non_emission_val_range[0], non_emission_val_range[1], reporter, dest_folder, args.duration, redo=args.redo)
         if args.source_cat or args.beam_list:
             extract_spectra(args.cube, args.source_cat, dest_folder, reporter, args.num_spectra, args.beam_list)
 
