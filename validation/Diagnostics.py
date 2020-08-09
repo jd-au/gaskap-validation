@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator, FormatStrFormatter
 import numpy as np
 from PIL import Image
+import seaborn as sns
 
 def find_subdir(cube, image, name):
     potential_parent_dirs = []
@@ -643,6 +644,8 @@ def plot_baselines(baseline_flag_pct, fig_folder, short_len=500, long_len=4000):
     """
     baselines = _read_baselines()
 
+    sns.set()
+    
     majorYLocFactor = 5
     minorYLocFactor = majorYLocFactor/5
     majorXLocFactor = 1000
