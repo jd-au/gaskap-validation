@@ -978,7 +978,7 @@ def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, beam_l
     reporter.add_metric(metric)
 
 
-def report_diagnostics(diagnostics_dir, dest_folder, reporter, short_len=500, long_len=4000):
+def report_diagnostics(diagnostics_dir, dest_folder, reporter, short_len=500, long_len=2000):
     print('\nReporting diagnostics')
 
     fig_folder= get_figures_folder(dest_folder)
@@ -1019,11 +1019,12 @@ def report_diagnostics(diagnostics_dir, dest_folder, reporter, short_len=500, lo
     baseline_fig = Diagnostics.plot_baselines(baseline_flag_pct, fig_folder, short_len=short_len, long_len=long_len)
     baseline_thumb, baseline_thumb_rel = Diagnostics.make_thumbnail(baseline_fig, fig_folder, dest_folder)
     baseline_fig_rel = os.path.relpath(baseline_fig, dest_folder)
+    flag_ant_file_rel = os.path.relpath(fig_folder+'/flagged_antenna.txt', dest_folder)
 
     # Output the report
     section = ReportSection('Diagnostics', '')
     section.add_item('Cal SBID', cal_sbid)
-    section.add_item('Completely Flagged Antennas', flagged_ant_desc)    
+    section.add_item('Completely Flagged Antennas', flagged_ant_desc, link=flag_ant_file_rel)
     section.add_item('Integrations Completely<br/>Flagged (%)', pct_integ_flagged)
     section.add_item('Short Baselines<br/>Flagged (%)', pct_short_base_flagged)
     section.add_item('Medium Baselines<br/>Flagged (%)', pct_medium_base_flagged)
@@ -1038,7 +1039,7 @@ def report_diagnostics(diagnostics_dir, dest_folder, reporter, short_len=500, lo
     metric = ValidationMetric('Flagged Short Baselines', 
         'Percent of short baselines ({}m or less) flagged across all integrations and all beams'.format(short_len),
         pct_short_base_flagged, assess_metric(pct_short_base_flagged, 
-        15, 30, low_good=True))
+        20, 40, low_good=True))
     reporter.add_metric(metric)
     metric = ValidationMetric('Flagged Long Baselines', 
         'Percent of long baselines ({}m or more) flagged across all integrations and all beams'.format(long_len),
