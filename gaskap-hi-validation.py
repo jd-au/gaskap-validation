@@ -88,7 +88,7 @@ def get_str(value):
     return value
 
 
-def plot_histogram(file_prefix, xlabel):
+def plot_histogram(file_prefix, xlabel, title):
     data = fits.getdata(file_prefix+'.fits')
     flat = data.flatten()
     flat = flat[~np.isnan(flat)]
@@ -96,37 +96,45 @@ def plot_histogram(file_prefix, xlabel):
     plt.grid()
     plt.xlabel(xlabel)
     plt.ylabel('Count')
-    plt.savefig(file_prefix+'_hist.png')
-    plt.savefig(file_prefix+'_hist_sml.png', dpi=16)
+    plt.title(title)
+    plt.savefig(file_prefix+'_hist.png', bbox_inches='tight')
+    plt.savefig(file_prefix+'_hist_sml.png', dpi=16, bbox_inches='tight')
     plt.close()
 
     
-def plot_map(file_prefix, cmap='magma', stretch='linear'):
+def plot_map(file_prefix, title, cmap='magma', stretch='linear'):
     gc = aplpy.FITSFigure(file_prefix+'.fits')
     gc.show_colorscale(cmap=cmap, stretch=stretch)
     gc.add_colorbar()
     gc.add_grid()
+    gc.set_title(title)
     gc.savefig(filename=file_prefix+'.png')
     gc.savefig(filename=file_prefix+'_sml.png', dpi=10 )
     gc.close()
 
 
-def plot_difference_map(hdu, file_prefix, vmax=None):
+def plot_difference_map(hdu, file_prefix, title, vmin=None, vmax=None):
     # Initiate a figure and axis object with WCS projection information
     wcs = WCS(hdu.header)
     fig = plt.figure(figsize=(18, 12))
     ax = fig.add_subplot(111, projection=wcs)
 
-    im = ax.imshow(hdu.data, cmap='RdBu_r',vmax=vmax)
-    ax.invert_yaxis() 
+    no_nan_data = np.nan_to_num(hdu.data)
+    if vmin is None and vmax is None:
+        vmin=np.percentile(no_nan_data, 0.25)
+        vmax=np.percentile(no_nan_data, 99.75)
+
+    im = ax.imshow(hdu.data, cmap='RdBu_r',vmin=vmin,vmax=vmax, origin='lower')
+    #ax.invert_yaxis() 
 
     ax.set_xlabel("Right Ascension (degrees)", fontsize=16)
     ax.set_ylabel("Declination (degrees)", fontsize=16)
+    ax.set_title(title, fontsize=16)
     ax.grid(color = 'gray', ls = 'dotted', lw = 2)
     cbar = plt.colorbar(im, pad=.07)
 
-    plt.savefig(file_prefix+'.png')
-    plt.savefig(file_prefix+'_sml.png', dpi=10 )
+    plt.savefig(file_prefix+'.png', bbox_inches='tight')
+    plt.savefig(file_prefix+'_sml.png', dpi=10, bbox_inches='tight')
 
     plt.close()
 
@@ -213,7 +221,7 @@ def build_fname(example_name, suffix):
 def get_figures_folder(dest_folder):
     return dest_folder + '/' + figures_folder + '/'
 
-def get_bane_background(infile, outfile_prefix, ncores=8, redo=False, plot=True):
+def get_bane_background(infile, outfile_prefix, plot_title_suffix, ncores=8, redo=False, plot=True):
     background_prefix = outfile_prefix+'_bkg'
     background_file = background_prefix + '.fits'
     if redo or not os.path.exists(background_file):
@@ -222,9 +230,9 @@ def get_bane_background(infile, outfile_prefix, ncores=8, redo=False, plot=True)
         os.system(cmd)
     
     if plot:
-        plot_map(background_prefix)
-        plot_histogram(background_prefix, 'Emission (Jy beam^{-1} km s^{-1})')
-        plot_map(outfile_prefix+'_rms')
+        plot_map(background_prefix, "Large scale emission in " + plot_title_suffix)
+        plot_histogram(background_prefix, 'Emission (Jy beam^{-1} km s^{-1})', "Emission for " + plot_title_suffix)
+        plot_map(outfile_prefix+'_rms', "Noise in "+ plot_title_suffix)
     
     return background_file
 
@@ -370,13 +378,14 @@ def check_for_emission(cube, vel_start, vel_end, reporter, dest_folder, ncores=8
     mom0.write(mom0_fname, overwrite=True)
 
     hi_data = fits.open(mom0_fname)
-    plot_difference_map(hi_data[0], folder+prefix)
+    plot_title_suffix = "emission region in " + os.path.basename(cube)
+    plot_difference_map(hi_data[0], folder+prefix, "Moment 0 map of " + plot_title_suffix)
 
     # Produce the background plots
-    bkg_data = get_bane_background(mom0_fname, folder+prefix, ncores=ncores, redo=redo)
+    bkg_data = get_bane_background(mom0_fname, folder+prefix, plot_title_suffix, ncores=ncores, redo=redo)
     map_page = folder + '/emission.html'
     rel_map_page = get_figures_folder('.') + '/emission.html'
-    output_map_page(map_page, prefix, 'Emission Plots')
+    output_map_page(map_page, prefix, 'Emission Plots for ' + os.path.basename(cube))
 
     hi_data = fits.open(folder + prefix+'_bkg.fits')
     max_em = np.nanmax(hi_data[0].data)
@@ -415,13 +424,14 @@ def check_for_non_emission(cube, vel_start, vel_end, reporter, dest_folder, ncor
     mom0.write(mom0_fname, overwrite=True)
 
     hi_data = fits.open(mom0_fname)
-    plot_difference_map(hi_data[0], folder+prefix)
+    plot_title_suffix = "non-emission region in " + os.path.basename(cube)
+    plot_difference_map(hi_data[0], folder+prefix, "Moment 0 map of " + plot_title_suffix)
 
     # Produce the background plots
-    bkg_data = get_bane_background(mom0_fname, folder+prefix, ncores=ncores, redo=redo)
+    bkg_data = get_bane_background(mom0_fname, folder+prefix, plot_title_suffix, ncores=ncores, redo=redo)
     map_page = folder + '/off_emission.html'
     rel_map_page = get_figures_folder('.') + '/off_emission.html'
-    output_map_page(map_page, prefix, 'Off-line Emission Plots')
+    output_map_page(map_page, prefix, 'Off-line Emission Plots for ' + os.path.basename(cube))
 
     hi_data = fits.open(folder+prefix+'_bkg.fits')
     max_em = np.nanmax(hi_data[0].data)
@@ -489,8 +499,9 @@ def measure_spectral_line_noise(slab, cube, vel_start, vel_end, reporter, dest_f
     fits.writeto(noise_fname, std_data.value, fits.getheader(mom0_fname), overwrite=True)
 
     # Produce the noise plots
-    plot_map(folder+prefix, cmap='plasma', stretch='arcsinh')
-    plot_histogram(folder+prefix, 'Noise level per channel (Jy beam^{-1})')
+    cube_name = os.path.basename(cube)
+    plot_map(folder+prefix, "Spectral axis noise map for " + cube_name, cmap='plasma', stretch='arcsinh')
+    plot_histogram(folder+prefix, 'Noise level per channel (Jy beam^{-1})', 'Spectral axis noise for ' + cube_name)
     median_noise = np.nanmedian(std_data.value[std_data.value!=0.0])
 
     # Extract header details
