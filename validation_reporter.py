@@ -77,7 +77,7 @@ def _output_metrics(f, reporter):
     f.write('\n</tr>\n<tr>')
     for metric in reporter.metrics:
         f.write('\n<td class={} title="{}">{}</td>'.format(_get_metric_class_name(metric.status), metric.description, 
-            round(metric.value, 3)))
+            metric.value))
     f.write('\n</tr>\n<table>')
     return
 
@@ -90,7 +90,7 @@ def _output_section(f, section):
     for item in section.items:
         f.write('\n<td>')
         if item.link:
-            f.write('<a href="{}">'.format(item.link))
+            f.write('<a href="{}" target="_blank">'.format(item.link))
 
         if item.value:
             f.write(str(item.value))
