@@ -829,9 +829,14 @@ def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, beam_l
     if source_cat:
         votable = parse(source_cat, pedantic=False)
         sources = votable.get_first_table()
+        srcs_tab = sources.to_table()
+        for key in ('component_name', 'col_component_name'):
+            if key in srcs_tab.keys():
+                comp_name_key = key
+                break
         bright_idx = np.argsort(sources.array['flux_peak'])[-num_spectra:]
         bright_srcs = sources.array[bright_idx]
-        bright_srcs.sort(order='component_name')
+        bright_srcs.sort(order=comp_name_key)
         for idx, src in enumerate(bright_srcs):
             pos = SkyCoord(ra=src['ra_deg_cont']*u.deg, dec=src['dec_deg_cont']*u.deg)
             bright_src_pos.append(pos)
