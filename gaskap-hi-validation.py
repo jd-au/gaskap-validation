@@ -40,7 +40,7 @@ from spectral_cube import SpectralCube
 from statsmodels.tsa import stattools
 from statsmodels.graphics.tsaplots import plot_pacf
 
-from validation import Diagnostics, Spectra
+from validation import Bandpass, Diagnostics, Spectra
 from validation_reporter import ValidationReport, ReportSection, ReportItem, ValidationMetric, output_html_report, output_metrics_xml
 
 
@@ -978,13 +978,36 @@ def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, beam_l
     reporter.add_metric(metric)
 
 
+def report_calibration(diagnostics_dir, dest_folder, reporter):
+    print('\nReporting calibration from ' + diagnostics_dir)
+
+    fig_folder= get_figures_folder(dest_folder)
+
+    bandpass, cal_sbid = Bandpass.get_cal_bandpass(diagnostics_dir)
+
+    # Plot bandpasses
+    bp_by_ant_fig = Bandpass.plot_bandpass_by_antenna(bandpass, cal_sbid, fig_folder)
+    bp_by_ant_thumb, bp_by_ant_thumb_rel = Diagnostics.make_thumbnail(bp_by_ant_fig, fig_folder, dest_folder)
+    bp_by_ant_fig_rel = os.path.relpath(bp_by_ant_fig, dest_folder)
+
+    bp_by_beam_fig = Bandpass.plot_bandpass_by_beam(bandpass, cal_sbid, fig_folder)
+    bp_by_beam_thumb, bp_by_beam_thumb_rel = Diagnostics.make_thumbnail(bp_by_beam_fig, fig_folder, dest_folder)
+    bp_by_beam_fig_rel = os.path.relpath(bp_by_beam_fig, dest_folder)
+
+    # Output the report
+    section = ReportSection('Calibration', '')
+    section.add_item('Cal SBID', cal_sbid)
+    section.add_item('Bandpass by Antenna', link=bp_by_ant_fig_rel, image=bp_by_ant_thumb_rel)
+    section.add_item('Bandpass by Beam', link=bp_by_beam_fig_rel, image=bp_by_beam_thumb_rel)
+    reporter.add_section(section)
+
+
 def report_diagnostics(diagnostics_dir, dest_folder, reporter, short_len=500, long_len=2000):
     print('\nReporting diagnostics')
 
     fig_folder= get_figures_folder(dest_folder)
 
     # Extract metadata
-    cal_sbid = Diagnostics.find_cal_sbid(diagnostics_dir)
     chan_width, cfreq, nchan = Diagnostics.get_freq_details(diagnostics_dir)
     chan_width_kHz = round(chan_width/1000., 3) # convert Hz to kHz
     n_ant, start_obs_date, end_obs_date, tobs, field, ra, dec, total_obs_bw = Diagnostics.get_metadata(diagnostics_dir)
@@ -1023,7 +1046,6 @@ def report_diagnostics(diagnostics_dir, dest_folder, reporter, short_len=500, lo
 
     # Output the report
     section = ReportSection('Diagnostics', '')
-    section.add_item('Cal SBID', cal_sbid)
     section.add_item('Completely Flagged Antennas', flagged_ant_desc, link=flag_ant_file_rel)
     section.add_item('Integrations Completely<br/>Flagged (%)', pct_integ_flagged)
     section.add_item('Short Baselines<br/>Flagged (%)', pct_short_base_flagged)
@@ -1102,6 +1124,7 @@ def main():
 
     diagnostics_dir = Diagnostics.find_diagnostics_dir(args.cube, args.image)
     if diagnostics_dir:
+        report_calibration(diagnostics_dir, dest_folder, reporter)
         report_diagnostics(diagnostics_dir, dest_folder, reporter)
 
     print ('\nProducing report to', dest_folder)
