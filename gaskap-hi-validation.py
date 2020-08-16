@@ -17,6 +17,7 @@ import math
 import os
 import re
 from string import Template
+import shutil
 import time
 import warnings
 
@@ -605,13 +606,16 @@ def get_pixel_area(fits_file,flux=0,nans=False,ra_axis=0,dec_axis=1,w=None):
     return area,solid_ang
 
 
-def report_image_stats(image, noise_file, reporter, dest_folder, ncores=8, redo=False):
+def report_image_stats(image, noise_file, reporter, dest_folder, diagnostics_dir, ncores=8, redo=False):
     print ('\nReporting image stats')
 
     fits_file = fits.open(image)
     hdr = fits_file[0].header
     w = WCS(hdr).celestial
     
+
+    fig_folder= get_figures_folder(dest_folder)
+
     # Image information
     askapSoftVer = 'N/A'
     askapPipelineVer = 'N/A'
@@ -646,11 +650,16 @@ def report_image_stats(image, noise_file, reporter, dest_folder, ncores=8, redo=
     # dynamic_range = img_peak_bounds/img_peak_rms
     #img_flux = np.sum(img_data[~np.isnan(img_data)]) / (1.133*((beam_maj * beam_min) / (img.raPS * img.decPS))) #divide by beam area
 
+    # Copy pipleine plots
+    field_src_plot = copy_existing_image(diagnostics_dir+'/image.i.SB*.cont.restored_sources.png', fig_folder)
+
     image_name = os.path.basename(image)
     section = ReportSection('Image', image_name)
     section.add_item('ASKAPsoft<br/>version', value=askapSoftVer)
     section.add_item('Pipeline<br/>version', value=askapPipelineVer)
     section.add_item('Synthesised Beam<br/>(arcsec)', value=beam)
+    add_opt_image_section('Source Map', field_src_plot, fig_folder, dest_folder, section)
+
     # section.add_item('Median r.m.s.<br/>(uJy)', value='{:.2f}'.format(img_rms))
     # section.add_item('Image peak<br/>(Jy)', value='{:.2f}'.format(img_peak_bounds))
     # section.add_item('Dynamic Range', value='{:.2f}'.format(dynamic_range))
@@ -978,6 +987,26 @@ def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, beam_l
     reporter.add_metric(metric)
 
 
+def copy_existing_image(image_pattern, fig_folder):
+    paths = glob.glob(image_pattern)
+    if len(paths) == 0:
+        return None
+
+    # Copy the file with default permnisisons and metadata
+    new_name = fig_folder + "/" + os.path.basename(paths[0])
+    shutil.copyfile(paths[0], new_name)
+    return new_name
+
+def add_opt_image_section(title, image_path, fig_folder, dest_folder, section):
+    if image_path == None:
+        section.add_item(title, value='N/A')
+        return
+    
+    img_thumb, img_thumb_rel = Diagnostics.make_thumbnail(image_path, fig_folder, dest_folder)
+    image_path_rel = os.path.relpath(image_path, dest_folder)
+    section.add_item(title, link=image_path_rel, image=img_thumb_rel)
+
+
 def report_calibration(diagnostics_dir, dest_folder, reporter):
     print('\nReporting calibration from ' + diagnostics_dir)
 
@@ -987,18 +1016,28 @@ def report_calibration(diagnostics_dir, dest_folder, reporter):
 
     # Plot bandpasses
     bp_by_ant_fig = Bandpass.plot_bandpass_by_antenna(bandpass, cal_sbid, fig_folder)
-    bp_by_ant_thumb, bp_by_ant_thumb_rel = Diagnostics.make_thumbnail(bp_by_ant_fig, fig_folder, dest_folder)
-    bp_by_ant_fig_rel = os.path.relpath(bp_by_ant_fig, dest_folder)
+    #bp_by_ant_thumb, bp_by_ant_thumb_rel = Diagnostics.make_thumbnail(bp_by_ant_fig, fig_folder, dest_folder)
+    #bp_by_ant_fig_rel = os.path.relpath(bp_by_ant_fig, dest_folder)
 
     bp_by_beam_fig = Bandpass.plot_bandpass_by_beam(bandpass, cal_sbid, fig_folder)
     bp_by_beam_thumb, bp_by_beam_thumb_rel = Diagnostics.make_thumbnail(bp_by_beam_fig, fig_folder, dest_folder)
     bp_by_beam_fig_rel = os.path.relpath(bp_by_beam_fig, dest_folder)
 
+    # Include the pipeline diagnostics
+    amp_diag_img = copy_existing_image(diagnostics_dir+'/amplitudesDiagnostics_'+str(cal_sbid)+'.png', fig_folder)
+    phase_diag_img = copy_existing_image(diagnostics_dir+'/phasesDiagnostics_'+str(cal_sbid)+'.png', fig_folder)
+    cal_param_pdf = copy_existing_image(diagnostics_dir+'/calparameters_*_bp_SB'+str(cal_sbid)+'.smooth.pdf', fig_folder)
+    cal_param_pdf_rel = os.path.relpath(cal_param_pdf, dest_folder) if cal_param_pdf else None
+
     # Output the report
     section = ReportSection('Calibration', '')
     section.add_item('Cal SBID', cal_sbid)
-    section.add_item('Bandpass by Antenna', link=bp_by_ant_fig_rel, image=bp_by_ant_thumb_rel)
+    add_opt_image_section('Bandpass by Antenna', bp_by_ant_fig, fig_folder, dest_folder, section)
     section.add_item('Bandpass by Beam', link=bp_by_beam_fig_rel, image=bp_by_beam_thumb_rel)
+    add_opt_image_section('Amplitude Diagnostics', amp_diag_img, fig_folder, dest_folder, section)
+    add_opt_image_section('Phase Diagnostics', phase_diag_img, fig_folder, dest_folder, section)
+    if cal_param_pdf_rel:
+        section.add_item('Parameters', value="pdf", link=cal_param_pdf_rel)
     reporter.add_section(section)
 
 
@@ -1109,6 +1148,7 @@ def main():
     cube_name = os.path.basename(obs_img)
     reporter = ValidationReport('GASKAP Validation Report: {}'.format(cube_name))
     report_observation(obs_img, reporter, args.duration)
+    diagnostics_dir = Diagnostics.find_diagnostics_dir(args.cube, args.image)
 
     if args.cube:
         report_cube_stats(args.cube, reporter)
@@ -1120,9 +1160,8 @@ def main():
             extract_spectra(args.cube, args.source_cat, dest_folder, reporter, args.num_spectra, args.beam_list)
 
     if args.image:
-        report_image_stats(args.image, args.noise, reporter, dest_folder, redo=args.redo)
+        report_image_stats(args.image, args.noise, reporter, dest_folder, diagnostics_dir, redo=args.redo)
 
-    diagnostics_dir = Diagnostics.find_diagnostics_dir(args.cube, args.image)
     if diagnostics_dir:
         report_calibration(diagnostics_dir, dest_folder, reporter)
         report_diagnostics(diagnostics_dir, dest_folder, reporter)
