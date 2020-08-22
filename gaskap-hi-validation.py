@@ -320,6 +320,7 @@ def report_observation(image, reporter, input_duration):
     section.add_item('Field Centre', value=centre)
     section.add_item('{}<br/>({})'.format(spec_title, spectral_unit), value=spectral_range)
     reporter.add_section(section)
+    return sbid
 
 
 def report_cube_stats(cube, reporter):
@@ -1041,7 +1042,7 @@ def report_calibration(diagnostics_dir, dest_folder, reporter):
     reporter.add_section(section)
 
 
-def report_diagnostics(diagnostics_dir, dest_folder, reporter, short_len=500, long_len=2000):
+def report_diagnostics(diagnostics_dir, sbid, dest_folder, reporter, short_len=500, long_len=2000):
     print('\nReporting diagnostics')
 
     fig_folder= get_figures_folder(dest_folder)
@@ -1053,9 +1054,9 @@ def report_diagnostics(diagnostics_dir, dest_folder, reporter, short_len=500, lo
     theoretical_rms_mjy = calc_theoretical_rms(chan_width, t_obs=tobs)
 
     # Extract flagging details
-    flag_stat_beams, n_flag_ant_beams, ant_flagged_in_all, pct_integ_flagged, baseline_flag_pct = Diagnostics.get_flagging_stats(
+    flag_stat_beams, n_flag_ant_beams, ant_flagged_in_all, pct_integ_flagged, baseline_flag_pct, pct_each_integ_flagged, bad_chan_pct_count = Diagnostics.get_flagging_stats(
         diagnostics_dir, fig_folder)
-    print ("Antenna flagged in all:", ant_flagged_in_all)
+    print("Antenna flagged in all:", ant_flagged_in_all)
     flagged_ant_desc = ", ".join(ant_flagged_in_all) if len(ant_flagged_in_all) > 0 else 'None'
     pct_short_base_flagged, pct_medium_base_flagged, pct_long_base_flagged = Diagnostics.calc_flag_percent(
         baseline_flag_pct, short_len=short_len, long_len=long_len)
@@ -1066,35 +1067,31 @@ def report_diagnostics(diagnostics_dir, dest_folder, reporter, short_len=500, lo
     # Plot beam stats
     beam_nums = Diagnostics.get_beam_numbers_closepack()
 
-    flagged_vis_fig = Diagnostics.plot_flag_stat(flag_stat_beams, beam_nums, fig_folder, closepack=True)
-    flagged_vis_thumb, flagged_vis_thumb_rel = Diagnostics.make_thumbnail(flagged_vis_fig, fig_folder, dest_folder)
-    flagged_vis_fig_rel = os.path.relpath(flagged_vis_fig, dest_folder)
+    flagged_vis_fig = Diagnostics.plot_flag_stat(flag_stat_beams, beam_nums, sbid, fig_folder, closepack=True)
+    flagged_ant_fig = Diagnostics.plot_flag_ant(n_flag_ant_beams, beam_nums, sbid, fig_folder, closepack=True)
+    beam_exp_rms_fig = Diagnostics.plot_beam_exp_rms(beam_exp_rms, beam_nums, sbid, fig_folder, closepack=True)
 
-    flagged_ant_fig = Diagnostics.plot_flag_ant(n_flag_ant_beams, beam_nums, fig_folder, closepack=True)
-    flagged_ant_thumb, flagged_ant_thumb_rel = Diagnostics.make_thumbnail(flagged_vis_fig, fig_folder, dest_folder)
-    flagged_ant_fig_rel = os.path.relpath(flagged_ant_fig, dest_folder)
-
-    beam_exp_rms_fig = Diagnostics.plot_beam_exp_rms(beam_exp_rms, beam_nums, fig_folder, closepack=True)
-    beam_exp_rms_thumb, beam_exp_rms_thumb_rel = Diagnostics.make_thumbnail(beam_exp_rms_fig, fig_folder, dest_folder)
-    beam_exp_rms_fig_rel = os.path.relpath(beam_exp_rms_fig, dest_folder)
-
-    baseline_fig = Diagnostics.plot_baselines(baseline_flag_pct, fig_folder, short_len=short_len, long_len=long_len)
-    baseline_thumb, baseline_thumb_rel = Diagnostics.make_thumbnail(baseline_fig, fig_folder, dest_folder)
-    baseline_fig_rel = os.path.relpath(baseline_fig, dest_folder)
+    baseline_fig = Diagnostics.plot_baselines(baseline_flag_pct, fig_folder, sbid, short_len=short_len, long_len=long_len)
     flag_ant_file_rel = os.path.relpath(fig_folder+'/flagged_antenna.txt', dest_folder)
+
+    integ_flag_fig = Diagnostics.plot_integrations(pct_each_integ_flagged, sbid, fig_folder)
+    flag_pct_dist_fig = Diagnostics.plot_flagging_distribution(bad_chan_pct_count, sbid, fig_folder)
+    
 
     # Output the report
     section = ReportSection('Diagnostics', '')
     section.add_item('Completely Flagged Antennas', flagged_ant_desc, link=flag_ant_file_rel)
     section.add_item('Integrations Completely<br/>Flagged (%)', pct_integ_flagged)
+    add_opt_image_section('Flagging over Time', integ_flag_fig, fig_folder, dest_folder, section)
+    add_opt_image_section('Flagging Distribution', flag_pct_dist_fig, fig_folder, dest_folder, section)
     section.add_item('Short Baselines<br/>Flagged (%)', pct_short_base_flagged)
     section.add_item('Medium Baselines<br/>Flagged (%)', pct_medium_base_flagged)
     section.add_item('Long Baselines<br/>Flagged (%)', pct_long_base_flagged)
-    section.add_item('Baselines', link=baseline_fig_rel, image=baseline_thumb_rel)
+    add_opt_image_section('Baselines', baseline_fig, fig_folder, dest_folder, section)
     section.add_item('Channel Width (kHz)', chan_width_kHz)
-    section.add_item('Flagged Visibilities', link=flagged_vis_fig_rel, image=flagged_vis_thumb_rel)
-    section.add_item('Flagged Antennas', link=flagged_ant_fig_rel, image=flagged_ant_thumb_rel)
-    section.add_item('Expected RMS per channel', link=beam_exp_rms_fig_rel, image=beam_exp_rms_thumb_rel)
+    add_opt_image_section('Flagged Visibilities', flagged_vis_fig, fig_folder, dest_folder, section)
+    add_opt_image_section('Flagged Antennas', flagged_ant_fig, fig_folder, dest_folder, section)
+    add_opt_image_section('Expected RMS per channel', beam_exp_rms_fig, fig_folder, dest_folder, section)
     reporter.add_section(section)
 
     metric = ValidationMetric('Flagged Short Baselines', 
@@ -1147,7 +1144,7 @@ def main():
         obs_img = args.image
     cube_name = os.path.basename(obs_img)
     reporter = ValidationReport('GASKAP Validation Report: {}'.format(cube_name))
-    report_observation(obs_img, reporter, args.duration)
+    sbid = report_observation(obs_img, reporter, args.duration)
     diagnostics_dir = Diagnostics.find_diagnostics_dir(args.cube, args.image)
 
     if args.cube:
@@ -1164,7 +1161,7 @@ def main():
 
     if diagnostics_dir:
         report_calibration(diagnostics_dir, dest_folder, reporter)
-        report_diagnostics(diagnostics_dir, dest_folder, reporter)
+        report_diagnostics(diagnostics_dir, sbid, dest_folder, reporter)
 
     print ('\nProducing report to', dest_folder)
     output_html_report(reporter, dest_folder)

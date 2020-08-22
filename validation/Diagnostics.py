@@ -13,7 +13,7 @@ import math
 from astropy.table import Table
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from matplotlib.ticker import MultipleLocator, FormatStrFormatter
+from matplotlib.ticker import MultipleLocator, FormatStrFormatter, PercentFormatter
 import numpy as np
 from PIL import Image
 import seaborn as sns
@@ -235,7 +235,7 @@ def _build_baseline_index(baseline_names):
     return baseidx
 
 
-def _get_flagging(flagging_file, flag_ant_file, num_integ, n_chan, baseline_names):
+def _get_flagging(flagging_file, flag_ant_file, num_integ, n_chan, baseline_names, bad_chan_pct_count):
     """
     Getting flagging statistics and finding out beam-by-beam antenna based (completely) flagging. 
     """
@@ -247,6 +247,7 @@ def _get_flagging(flagging_file, flag_ant_file, num_integ, n_chan, baseline_name
 
     # Finding out which antenna has been flagged completely.
     all_ant1, all_ant2, all_flag = [], [], []
+    per_integ_flag = []
     baseline_count, baseline_flag = np.zeros((len(baseline_names))), np.zeros((len(baseline_names)))
     integ_ant1, integ_ant2, integ_flag = [], [], []
     integ_num_inner, integ_flag_inner, integ_num_outer, integ_flag_outer = 0, 0, 0, 0
@@ -271,10 +272,12 @@ def _get_flagging(flagging_file, flag_ant_file, num_integ, n_chan, baseline_name
                         base_idx = base_idx_map[base_name]
                         integ_baseline_count[base_idx] += 1
                         integ_baseline_flag[base_idx] += flag
+                        bad_chan_pct_count[int(flag)] += 1
             elif "# Integration Number:" in line:
                 tokens = line.split()
                 integ_num = int(tokens[3])
                 flag = float(tokens[5])
+                per_integ_flag.append(flag)
                 if flag == 100:
                     num_integ_flagged += 1
                     # totally flagged so don't count individual flagging
@@ -331,7 +334,7 @@ def _get_flagging(flagging_file, flag_ant_file, num_integ, n_chan, baseline_name
     autocorr_flagged_pct = (36 * num_integ * n_chan / total_uv)*100.0
     data_flagged_pct = round(total_flagged_pct - autocorr_flagged_pct, 3)
 
-    return data_flagged_pct, total_flagged_ant, flag_ant_file, ant_names, flag_pct_integ, baseline_flag_pct
+    return data_flagged_pct, total_flagged_ant, flag_ant_file, ant_names, flag_pct_integ, baseline_flag_pct, per_integ_flag
 
 
 def get_flagging_stats(diagnostics_dir, fig_folder, verbose=False):
@@ -374,11 +377,16 @@ def get_flagging_stats(diagnostics_dir, fig_folder, verbose=False):
         print ("Num flagging files:", len(flagging_files))
 
     ant_flagged_in_all = None
+    total_per_integ_flag = []
+    num_file_per_integ = []
+    num_skipped_integ_pct = 0
+    bad_chan_pct_count = np.zeros(101)
     flag_baseline = np.zeros((len(baselines['name'])))
     unflagged_beam_count = 0
     for ffile in flagging_files:
         n_rec, n_chan, exp_count = _get_flagging_key_values(ffile)
-        flag_stat, n_flag_ant, flag_ant_file, flagged_ant, pct_integ_flagged, baseline_flag_pct = _get_flagging(ffile, flag_ant_file, n_rec, n_chan, baseline_names)
+        flag_stat, n_flag_ant, flag_ant_file, flagged_ant, pct_integ_flagged, baseline_flag_pct, per_integ_flag = _get_flagging(
+            ffile, flag_ant_file, n_rec, n_chan, baseline_names, bad_chan_pct_count)
         flag_stat_beams.append(flag_stat)
         n_flag_ant_beams.append(n_flag_ant)
         flag_integ.append(pct_integ_flagged)
@@ -391,12 +399,25 @@ def get_flagging_stats(diagnostics_dir, fig_folder, verbose=False):
             for ant in list(ant_flagged_in_all):
                 if ant not in flagged_ant:
                     ant_flagged_in_all.remove(ant)
+        if len(total_per_integ_flag) == 0 or len(total_per_integ_flag[-1]) != len(per_integ_flag):
+        #if len(total_per_integ_flag[-1]) != len(per_integ_flag):
+            total_per_integ_flag.append(np.asarray(per_integ_flag))
+            num_file_per_integ.append(1)
+        else:
+            total_per_integ_flag[-1] += per_integ_flag
+            num_file_per_integ[-1] += 1
+        #else:
+        #    print ("Skipping integrations for " + ffile)
+        #    num_skipped_integ_pct +=1
 
     pct_integ_flagged = round(np.mean(flag_integ),1)
     pct_baseline_flagged = flag_baseline / unflagged_beam_count
+    pct_each_integ_flagged = np.asarray(total_per_integ_flag) / num_file_per_integ
+    #pct_each_integ_flagged = total_per_integ_flag / num_file_per_integ
     print ("Flagged integrations", flag_integ)
+    print ("Pct each integration flaged", pct_each_integ_flagged)
 
-    return flag_stat_beams, n_flag_ant_beams, ant_flagged_in_all, pct_integ_flagged, pct_baseline_flagged
+    return flag_stat_beams, n_flag_ant_beams, ant_flagged_in_all, pct_integ_flagged, pct_baseline_flagged, pct_each_integ_flagged, bad_chan_pct_count
 
 
 def calc_beam_exp_rms(flag_stat_beams, theoretical_rms_mjy):
@@ -455,12 +476,12 @@ def make_thumbnail(image, fig_folder, rel_to_folder, size_x=70, size_y=70, name=
     return file_name, rel_file_name
 
 
-def plot_flag_stat(flag_stat, beam_nums, fig_dir, closepack=False):
+def plot_flag_stat(flag_stat, beam_nums, sbid, fig_dir, closepack=False):
     """
     Plotting and visualising flagging statistics of 36 beams. 
     """
     
-    title = 'Flagged Fraction'
+    title = 'Flagged Fraction for SBID {}'.format(sbid)
     plot_name = 'FlagStat.png'
     saved_fig = fig_dir+'/'+plot_name
 
@@ -501,6 +522,7 @@ def plot_flag_stat(flag_stat, beam_nums, fig_dir, closepack=False):
         cb.set_label('Percentage Flagged')
         cb.ax.tick_params(labelsize=10)
 
+    plt.suptitle(title)
     plt.savefig(saved_fig, bbox_inches='tight')
     plt.close()
     print (saved_fig, plot_name)
@@ -508,12 +530,12 @@ def plot_flag_stat(flag_stat, beam_nums, fig_dir, closepack=False):
     return saved_fig
 
 
-def plot_flag_ant(n_flag_ant_beams, beam_nums, fig_dir, closepack=False):
+def plot_flag_ant(n_flag_ant_beams, beam_nums, sbid, fig_dir, closepack=False):
     """
     Plotting and visualising number of flagged (completely) antennas beam-by-beam. 
     """
 
-    title = 'No. of 100% flagged antenna'
+    title = 'No. of 100% flagged antenna for SBID {}'.format(sbid)
     plot_name = 'FlagAnt.png'
     saved_fig = fig_dir+'/'+plot_name
     
@@ -561,6 +583,7 @@ def plot_flag_ant(n_flag_ant_beams, beam_nums, fig_dir, closepack=False):
         cb.set_ticklabels(labels)
         cb.ax.tick_params(labelsize=10)
 
+    plt.suptitle(title)
     plt.savefig(saved_fig, bbox_inches='tight')
     plt.close()
     print (saved_fig, plot_name)
@@ -568,12 +591,12 @@ def plot_flag_ant(n_flag_ant_beams, beam_nums, fig_dir, closepack=False):
     return saved_fig
 
 
-def plot_beam_exp_rms(beam_exp_rms, beam_nums, fig_folder, closepack=False):
+def plot_beam_exp_rms(beam_exp_rms, beam_nums, sbid, fig_folder, closepack=False):
     """
     Plotting and visualising expected RMS of all beams.
     """
 
-    title = 'Expected RMS'
+    title = 'Expected RMS for SBID {}'.format(sbid)
     plot_name = 'Exp_RMS.png'
     saved_fig = fig_folder+'/'+plot_name
 
@@ -616,6 +639,7 @@ def plot_beam_exp_rms(beam_exp_rms, beam_nums, fig_folder, closepack=False):
         cb.set_label('mJy / beam')
         cb.ax.tick_params(labelsize=10)
 
+    plt.suptitle(title)
     plt.savefig(saved_fig, bbox_inches='tight')
     plt.close()
     print (saved_fig, plot_name)
@@ -623,7 +647,7 @@ def plot_beam_exp_rms(beam_exp_rms, beam_nums, fig_folder, closepack=False):
     return saved_fig
 
 
-def plot_baselines(baseline_flag_pct, fig_folder, short_len=500, long_len=4000):
+def plot_baselines(baseline_flag_pct, fig_folder, sbid, short_len=500, long_len=4000):
     """
     Plot a histogram of the ASKAP baselines by length overlaid with the fraction unflagged and flagged at each length bin.
 
@@ -678,7 +702,8 @@ def plot_baselines(baseline_flag_pct, fig_folder, short_len=500, long_len=4000):
     ax.xaxis.set_major_formatter(majorXFormatter)
     ax.xaxis.set_minor_locator(minorXLocator)
 
-    ax.set_xlabel(r'UV Distance [m]')
+    ax.set_title('Baseline Flagging for SBID {}'.format(sbid) )
+    ax.set_xlabel(r'UV Distance (m)')
     ax.set_ylabel(r'Baselines')
     plt.legend(loc=0, fontsize=8)
     saved_fig = fig_folder+'/baselines.png'
@@ -714,3 +739,52 @@ def calc_flag_percent(baseline_flag_pct, short_len=500, long_len=4000):
     mid_baselines = (baselines['length'] > short_len) & (baselines['length'] < long_len)
     mid_base_flag_pct = round(np.mean(baseline_flag_pct[mid_baselines]),1)
     return short_base_flag_pct, mid_base_flag_pct, long_base_flag_pct
+
+
+def plot_integrations(pct_each_integ_flagged, sbid, fig_folder):
+    sns.set()
+
+    fig, ax = plt.subplots(figsize=(9.6, 7.2))
+    num_bins = 100
+    for idx, sample in enumerate(pct_each_integ_flagged):
+        corrected_sample = sample / (len(sample/num_bins))
+        interleave = chr(ord('A')+idx)
+        plt.hist(range(len(corrected_sample)), weights=corrected_sample, histtype = 'stepfilled', bins = num_bins, alpha = 0.5, range=(0,len(corrected_sample)), #color = tableau20[2], 
+                    label = 'Interleave ' + interleave, edgecolor = 'black')
+
+    #corrected_sample = pct_each_integ_flagged / (len(pct_each_integ_flagged/num_bins))
+    #plt.hist(range(len(corrected_sample)), weights=corrected_sample, histtype = 'stepfilled', bins = num_bins, alpha = 0.5, range=(0,len(corrected_sample)), #color = tableau20[2], 
+    #            label = '', edgecolor = 'black')
+    plt.gca().yaxis.set_major_formatter(PercentFormatter(1))
+    ax.set_ylim(0,1)
+    if len(pct_each_integ_flagged) > 1:
+        ax.legend()
+    
+    ax.set_title('Integration Flagging for SBID {}'.format(sbid) )
+    ax.set_xlabel(r'Time (Integration number)')
+    ax.set_ylabel(r'Percent Flagged')
+    saved_fig = fig_folder+'/integration_flagging.png'
+    plt.savefig(saved_fig, bbox_inches='tight')
+    plt.close()
+    print (saved_fig)
+
+    return saved_fig
+
+
+def plot_flagging_distribution(bad_chan_pct_count, sbid, fig_folder):
+    sns.set()
+
+    fig, ax = plt.subplots(figsize=(9.6, 7.2))
+    plt.hist(np.linspace(0, 1, num=101), weights=bad_chan_pct_count, histtype = 'stepfilled', bins = 25, alpha = 0.8, #color = tableau20[2], 
+            edgecolor = 'black')
+    plt.gca().xaxis.set_major_formatter(PercentFormatter(1))
+
+    ax.set_title('Distribution of Flagging Fraction for SBID {}'.format(sbid) )
+    ax.set_xlabel(r'Percent Channels Flagged in Baseline Integration')
+    ax.set_ylabel(r'Number of occurrences')
+    saved_fig = fig_folder+'/flagged_channel_distribution.png'
+    plt.savefig(saved_fig, bbox_inches='tight')
+    plt.close()
+    print (saved_fig)
+
+    return saved_fig

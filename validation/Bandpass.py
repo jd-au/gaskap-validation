@@ -127,11 +127,11 @@ def plot_bandpass_summary(bandpass, summary_axis, sbid, fig_folder):
         else:
             label = "ak{:02d}".format(beam_num+1)
         if np.where(order == beam_num)[0] < 10 and beam_dev[beam_num] > 1:
-            ax0.plot(x_means[beam_num], label=label)
-            ax1.plot(y_means[beam_num], label=label)
+            ax0.plot(x_means[beam_num], label=label, lw=2, zorder=2)
+            ax1.plot(y_means[beam_num], label=label, lw=2, zorder=2)
         else: 
-            ax0.plot(x_means[beam_num], color='grey', lw=1)
-            ax1.plot(y_means[beam_num], color='grey', lw=1)
+            ax0.plot(x_means[beam_num], color='grey', lw=1, zorder=1)
+            ax1.plot(y_means[beam_num], color='grey', lw=1, zorder=1)
 
     ax0.legend()
     ax0.set_title("Median XX bandpass for each " + tgt_name)
