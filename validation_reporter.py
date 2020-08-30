@@ -35,8 +35,9 @@ class ValidationMetric(object):
 
 
 class ValidationReport(object):
-    def __init__(self, title):
+    def __init__(self, title, metrics_subtitle='GASKAP HI Validation Metrics'):
         self.title = title
+        self.metrics_subtitle = metrics_subtitle
         self.sections = []
         self.metrics = []
 
@@ -70,7 +71,7 @@ def _get_metric_class_name(status):
 
 
 def _output_metrics(f, reporter):
-    _output_report_table_header(f, 'GASKAP HI Validation Metrics')
+    _output_report_table_header(f, reporter.metrics_subtitle)
     f.write('\n<tr>')
     for metric in reporter.metrics:
         f.write('\n<th title="{}">{}</th>'.format(metric.description, metric.title))

@@ -18,6 +18,17 @@ import numpy as np
 from PIL import Image
 import seaborn as sns
 
+class SchedulingInfo:
+    def __init__(self):
+        self.calid = None
+        self.sbid = None
+        self.field_name = None
+        self.corr_mode = None
+        self.footprint = None
+        self.pitch = None
+        self.cal_src = None
+
+
 def find_subdir(cube, image, name):
     potential_parent_dirs = []
     if cube:
@@ -49,6 +60,24 @@ def find_diagnostics_dir(cube, image):
     The path to the diagnostics directory, or None if it cannot be found.
     """
     return find_subdir(cube, image, 'diagnostics')
+
+
+def find_metadata_dir(cube, image):
+    """
+    Identify the location of the metadata dir based on other specified file locations.
+
+    Parameters
+    ----------
+    cube: path
+        Path to the spectral line cube, if any
+    image: path
+        Path to the continuum image, if any
+
+    Returns
+    -------
+    The path to the diagnostics directory, or None if it cannot be found.
+    """
+    return find_subdir(cube, image, 'metadata')
 
 
 def find_flagging_summary_dir(diagnostics):
@@ -515,6 +544,7 @@ def plot_flag_stat(flag_stat, beam_nums, sbid, fig_dir, closepack=False):
             ax.text(beam_xpos[j], beam_ypos[j], bnum)
 
         ax.set_xlim(0,0.7)
+        ax.set_ylim(0.1,1.3)
         ax.tick_params(axis='both',which='both', bottom=False,top=False,right=False,left=False,labelbottom=False, labelleft=False)
         ax.set_title("Flagged Fraction for Interleave " + chr(ord('A')+i))
 
@@ -573,6 +603,7 @@ def plot_flag_ant(n_flag_ant_beams, beam_nums, sbid, fig_dir, closepack=False):
             ax.text(beam_xpos[j], beam_ypos[j], bnum)
 
         ax.set_xlim(0,0.7)
+        ax.set_ylim(0.1,1.3)
         ax.tick_params(axis='both',which='both', bottom=False,top=False,right=False,left=False,labelbottom=False, labelleft=False)
         ax.set_title("No. of 100% flagged antenna for Interleave " + chr(ord('A')+i))
 
@@ -632,6 +663,7 @@ def plot_beam_exp_rms(beam_exp_rms, beam_nums, sbid, fig_folder, closepack=False
             ax.text(beam_xpos[j], beam_ypos[j], bnum)
 
         ax.set_xlim(0,0.7)
+        ax.set_ylim(0.1,1.3)
         ax.tick_params(axis='both',which='both', bottom=False,top=False,right=False,left=False,labelbottom=False, labelleft=False)
         ax.set_title("Expected RMS for Interleave " + chr(ord('A')+i))
 
@@ -702,6 +734,19 @@ def plot_baselines(baseline_flag_pct, fig_folder, sbid, short_len=500, long_len=
     ax.xaxis.set_major_formatter(majorXFormatter)
     ax.xaxis.set_minor_locator(minorXLocator)
 
+    # Add a top axis of fringe separation    
+    ax_top = ax.twiny()
+    ticks_arcsec = np.array([60, 30, 20, 10])
+    top_tick_pos = []
+    for fringe_sep in ticks_arcsec:
+        metres = (1.22*0.21)/(math.radians(fringe_sep/3600))
+        top_tick_pos.append(metres)
+    ax_top.set_xticks(top_tick_pos)
+    ax_top.set_xbound(ax.get_xbound())
+    ax_top.set_xticklabels(ticks_arcsec)
+    ax_top.set_xlabel(r'Fringe separation (arcsec)')
+    ax_top.grid(False)
+
     ax.set_title('Baseline Flagging for SBID {}'.format(sbid) )
     ax.set_xlabel(r'UV Distance (m)')
     ax.set_ylabel(r'Baselines')
@@ -752,9 +797,6 @@ def plot_integrations(pct_each_integ_flagged, sbid, fig_folder):
         plt.hist(range(len(corrected_sample)), weights=corrected_sample, histtype = 'stepfilled', bins = num_bins, alpha = 0.5, range=(0,len(corrected_sample)), #color = tableau20[2], 
                     label = 'Interleave ' + interleave, edgecolor = 'black')
 
-    #corrected_sample = pct_each_integ_flagged / (len(pct_each_integ_flagged/num_bins))
-    #plt.hist(range(len(corrected_sample)), weights=corrected_sample, histtype = 'stepfilled', bins = num_bins, alpha = 0.5, range=(0,len(corrected_sample)), #color = tableau20[2], 
-    #            label = '', edgecolor = 'black')
     plt.gca().yaxis.set_major_formatter(PercentFormatter(1))
     ax.set_ylim(0,1)
     if len(pct_each_integ_flagged) > 1:
@@ -775,16 +817,67 @@ def plot_flagging_distribution(bad_chan_pct_count, sbid, fig_folder):
     sns.set()
 
     fig, ax = plt.subplots(figsize=(9.6, 7.2))
-    plt.hist(np.linspace(0, 1, num=101), weights=bad_chan_pct_count, histtype = 'stepfilled', bins = 25, alpha = 0.8, #color = tableau20[2], 
+    fraction = bad_chan_pct_count / np.sum(bad_chan_pct_count)
+    plt.hist(np.linspace(0, 1, num=101), weights=fraction, histtype = 'stepfilled', bins = 25, alpha = 0.8, #color = tableau20[2], 
             edgecolor = 'black')
     plt.gca().xaxis.set_major_formatter(PercentFormatter(1))
 
     ax.set_title('Distribution of Flagging Fraction for SBID {}'.format(sbid) )
     ax.set_xlabel(r'Percent Channels Flagged in Baseline Integration')
-    ax.set_ylabel(r'Number of occurrences')
+    ax.set_ylabel(r'Fraction of occurrences')
     saved_fig = fig_folder+'/flagged_channel_distribution.png'
     plt.savefig(saved_fig, bbox_inches='tight')
     plt.close()
     print (saved_fig)
 
     return saved_fig
+
+
+def get_sched_info(image):
+    """
+    Retrieve the scheduling info from the observation metadata.
+
+    Parameters
+    ----------
+    image: string
+        The path to an image or cube, used to find the metadata folder
+
+    Returns
+    -------
+    A SchedulingInfo object describing the observation.
+
+    """
+    sched_info = SchedulingInfo()
+
+    metadata_dir = find_metadata_dir(None, image)
+    if metadata_dir:
+        info_files = glob.glob('{}/schedblock-info-*[0-9].txt'.format(metadata_dir))
+        for filename in info_files:
+            in_cal = False
+            with open(filename, 'r') as f:
+                line_num = 0
+                for line in f:
+                    if line.startswith('==') or line.startswith('--'):
+                        continue
+                    line_num += 1
+                    # print (line.strip())
+                    if line_num == 2:
+                        parts = line.split(' ')
+                        print (parts)
+                        if parts[1] == 'bandpass':
+                            in_cal = True
+                            sched_info.calid = parts[0]
+                        else:
+                            sched_info.sbid = parts[0]
+                            sched_info.field_name = parts[1]
+                    
+                    if not in_cal and line.startswith('common.target.src%d.corrmode'):
+                        sched_info.corr_mode = line.split(' = ')[1].strip()
+                    if not in_cal and line.startswith('common.target.src%d.footprint.name'):
+                        sched_info.footprint = line.split(' = ')[1].strip()
+                    if not in_cal and line.startswith('common.target.src%d.footprint.pitch'):
+                        sched_info.pitch = line.split(' = ')[1].strip()
+                    if in_cal and line.startswith('common.target.src%d.field_name'):
+                        sched_info.cal_src = line.split(' = ')[1].strip()
+
+    return sched_info

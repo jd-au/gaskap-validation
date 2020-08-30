@@ -269,11 +269,13 @@ def get_spectral_units(ctype, cunit, hdr):
     return spectral_unit, spectral_conversion
 
 
-def report_observation(image, reporter, input_duration):
+def report_observation(image, reporter, input_duration, sched_info):
+    print('\nReporting observation based on ' + image)
+
     hdr = fits.getheader(image)
     w = WCS(hdr).celestial
 
-    sbid = hdr['SBID'] if 'SBID' in hdr else ''
+    sbid = hdr['SBID'] if 'SBID' in hdr else sched_info.sbid
     project = hdr['PROJECT'] if 'PROJECT' in hdr else ''
     proj_link = None
     if project.startswith('AS'):
@@ -312,12 +314,18 @@ def report_observation(image, reporter, input_duration):
                 spectral_range = '{:0.3f}'.format(centre_freq)
                 spec_title = 'Centre Freq'
 
+    footprint = sched_info.footprint
+    if footprint and sched_info.pitch:
+        footprint = "{}_{}".format(footprint, sched_info.pitch)
     section = ReportSection('Observation')
     section.add_item('SBID', value=sbid)
     section.add_item('Project', value=project, link=proj_link)
     section.add_item('Date', value=date)
     section.add_item('Duration<br/>(hours)', value='{:.2f}'.format(duration))
+    section.add_item('Field', value=sched_info.field_name)
     section.add_item('Field Centre', value=centre)
+    section.add_item('Correlator<br/>Mode', value=sched_info.corr_mode)
+    section.add_item('Footprint', value=footprint)
     section.add_item('{}<br/>({})'.format(spec_title, spectral_unit), value=spectral_range)
     reporter.add_section(section)
     return sbid
@@ -1042,10 +1050,11 @@ def report_calibration(diagnostics_dir, dest_folder, reporter):
     reporter.add_section(section)
 
 
-def report_diagnostics(diagnostics_dir, sbid, dest_folder, reporter, short_len=500, long_len=2000):
+def report_diagnostics(diagnostics_dir, sbid, dest_folder, reporter, sched_info, short_len=500, long_len=2000):
     print('\nReporting diagnostics')
 
     fig_folder= get_figures_folder(dest_folder)
+    is_closepack = sched_info.footprint == None or sched_info.footprint.startswith('closepack')
 
     # Extract metadata
     chan_width, cfreq, nchan = Diagnostics.get_freq_details(diagnostics_dir)
@@ -1063,13 +1072,16 @@ def report_diagnostics(diagnostics_dir, sbid, dest_folder, reporter, short_len=5
 
     # Extract beam RMS
     beam_exp_rms = Diagnostics.calc_beam_exp_rms(flag_stat_beams, theoretical_rms_mjy)
+    rms_min = np.min(beam_exp_rms)
+    rms_max = np.max(beam_exp_rms)
+    rms_range_pct = round((rms_max-rms_min)/rms_min*100,1)
 
     # Plot beam stats
     beam_nums = Diagnostics.get_beam_numbers_closepack()
 
-    flagged_vis_fig = Diagnostics.plot_flag_stat(flag_stat_beams, beam_nums, sbid, fig_folder, closepack=True)
-    flagged_ant_fig = Diagnostics.plot_flag_ant(n_flag_ant_beams, beam_nums, sbid, fig_folder, closepack=True)
-    beam_exp_rms_fig = Diagnostics.plot_beam_exp_rms(beam_exp_rms, beam_nums, sbid, fig_folder, closepack=True)
+    flagged_vis_fig = Diagnostics.plot_flag_stat(flag_stat_beams, beam_nums, sbid, fig_folder, closepack=is_closepack)
+    flagged_ant_fig = Diagnostics.plot_flag_ant(n_flag_ant_beams, beam_nums, sbid, fig_folder, closepack=is_closepack)
+    beam_exp_rms_fig = Diagnostics.plot_beam_exp_rms(beam_exp_rms, beam_nums, sbid, fig_folder, closepack=is_closepack)
 
     baseline_fig = Diagnostics.plot_baselines(baseline_flag_pct, fig_folder, sbid, short_len=short_len, long_len=long_len)
     flag_ant_file_rel = os.path.relpath(fig_folder+'/flagged_antenna.txt', dest_folder)
@@ -1103,6 +1115,11 @@ def report_diagnostics(diagnostics_dir, sbid, dest_folder, reporter, short_len=5
         'Percent of long baselines ({}m or more) flagged across all integrations and all beams'.format(long_len),
         pct_long_base_flagged, assess_metric(pct_long_base_flagged, 
         30, 45, low_good=True))
+    reporter.add_metric(metric)
+    metric = ValidationMetric('Expected RMS Variance', 
+        'The percentage variance of expected RMS across the field.',
+        rms_range_pct, assess_metric(rms_range_pct, 
+        10, 30, low_good=True))
     reporter.add_metric(metric)
 
 
@@ -1139,12 +1156,16 @@ def main():
     if args.cube:
         print ('\nChecking quality level of GASKAP HI cube:', args.cube)
         obs_img = args.cube
+        metrics_subtitle = 'GASKAP HI Validation Metrics'
     else: 
-        print ('\nChecking quality level of GASKAP image:', args.image)
+        print ('\nChecking quality level of ASKAP image:', args.image)
         obs_img = args.image
+        metrics_subtitle = 'ASKAP Observation Diagnostics Metrics'
     cube_name = os.path.basename(obs_img)
-    reporter = ValidationReport('GASKAP Validation Report: {}'.format(cube_name))
-    sbid = report_observation(obs_img, reporter, args.duration)
+    reporter = ValidationReport('GASKAP Validation Report: {}'.format(cube_name), metrics_subtitle=metrics_subtitle)
+
+    sched_info = Diagnostics.get_sched_info(obs_img)
+    sbid = report_observation(obs_img, reporter, args.duration, sched_info)
     diagnostics_dir = Diagnostics.find_diagnostics_dir(args.cube, args.image)
 
     if args.cube:
@@ -1161,7 +1182,7 @@ def main():
 
     if diagnostics_dir:
         report_calibration(diagnostics_dir, dest_folder, reporter)
-        report_diagnostics(diagnostics_dir, sbid, dest_folder, reporter)
+        report_diagnostics(diagnostics_dir, sbid, dest_folder, reporter, sched_info)
 
     print ('\nProducing report to', dest_folder)
     output_html_report(reporter, dest_folder)
