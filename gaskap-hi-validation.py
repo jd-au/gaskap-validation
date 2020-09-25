@@ -269,7 +269,7 @@ def get_spectral_units(ctype, cunit, hdr):
     return spectral_unit, spectral_conversion
 
 
-def report_observation(image, reporter, input_duration, sched_info):
+def report_observation(image, reporter, input_duration, sched_info, obs_metadata):
     print('\nReporting observation based on ' + image)
 
     hdr = fits.getheader(image)
@@ -314,6 +314,20 @@ def report_observation(image, reporter, input_duration, sched_info):
                 spectral_range = '{:0.3f}'.format(centre_freq)
                 spec_title = 'Centre Freq'
 
+    # Field info
+    if obs_metadata:
+        field_names = ''
+        field_centres = ''
+        for i,field in enumerate(obs_metadata.fields):
+            if i > 0:
+                field_names += '<br/>'
+                field_centres += '<br/>'
+            field_names += field.name
+            field_centres += field.ra + ' ' + field.dec
+    else:
+        field_names = sched_info.field_name
+        field_centres = centre
+    
     footprint = sched_info.footprint
     if footprint and sched_info.pitch:
         footprint = "{}_{}".format(footprint, sched_info.pitch)
@@ -322,8 +336,8 @@ def report_observation(image, reporter, input_duration, sched_info):
     section.add_item('Project', value=project, link=proj_link)
     section.add_item('Date', value=date)
     section.add_item('Duration<br/>(hours)', value='{:.2f}'.format(duration))
-    section.add_item('Field', value=sched_info.field_name)
-    section.add_item('Field Centre', value=centre)
+    section.add_item('Field(s)', value=field_names)
+    section.add_item('Field Centre(s)', value=field_centres)
     section.add_item('Correlator<br/>Mode', value=sched_info.corr_mode)
     section.add_item('Footprint', value=footprint)
     section.add_item('{}<br/>({})'.format(spec_title, spectral_unit), value=spectral_range)
@@ -1050,7 +1064,7 @@ def report_calibration(diagnostics_dir, dest_folder, reporter):
     reporter.add_section(section)
 
 
-def report_diagnostics(diagnostics_dir, sbid, dest_folder, reporter, sched_info, short_len=500, long_len=2000):
+def report_diagnostics(diagnostics_dir, sbid, dest_folder, reporter, sched_info, obs_metadata, short_len=500, long_len=2000):
     print('\nReporting diagnostics')
 
     fig_folder= get_figures_folder(dest_folder)
@@ -1059,8 +1073,12 @@ def report_diagnostics(diagnostics_dir, sbid, dest_folder, reporter, sched_info,
     # Extract metadata
     chan_width, cfreq, nchan = Diagnostics.get_freq_details(diagnostics_dir)
     chan_width_kHz = round(chan_width/1000., 3) # convert Hz to kHz
-    n_ant, start_obs_date, end_obs_date, tobs, field, ra, dec, total_obs_bw = Diagnostics.get_metadata(diagnostics_dir)
-    theoretical_rms_mjy = calc_theoretical_rms(chan_width, t_obs=tobs)
+
+    theoretical_rms_mjy = np.zeros(len(obs_metadata.fields))
+    total_rows = sum([field.num_rows for field in obs_metadata.fields])
+    for idx, field in enumerate(obs_metadata.fields):
+        field_tobs = obs_metadata.tobs * field.num_rows / total_rows
+        theoretical_rms_mjy[idx] = calc_theoretical_rms(chan_width, t_obs=field_tobs)
 
     # Extract flagging details
     flag_stat_beams, n_flag_ant_beams, ant_flagged_in_all, pct_integ_flagged, baseline_flag_pct, pct_each_integ_flagged, bad_chan_pct_count = Diagnostics.get_flagging_stats(
@@ -1165,8 +1183,9 @@ def main():
     reporter = ValidationReport('GASKAP Validation Report: {}'.format(cube_name), metrics_subtitle=metrics_subtitle)
 
     sched_info = Diagnostics.get_sched_info(obs_img)
-    sbid = report_observation(obs_img, reporter, args.duration, sched_info)
     diagnostics_dir = Diagnostics.find_diagnostics_dir(args.cube, args.image)
+    obs_metadata = Diagnostics.get_metadata(diagnostics_dir) if diagnostics_dir else None
+    sbid = report_observation(obs_img, reporter, args.duration, sched_info, obs_metadata)
 
     if args.cube:
         report_cube_stats(args.cube, reporter)
@@ -1182,7 +1201,7 @@ def main():
 
     if diagnostics_dir:
         report_calibration(diagnostics_dir, dest_folder, reporter)
-        report_diagnostics(diagnostics_dir, sbid, dest_folder, reporter, sched_info)
+        report_diagnostics(diagnostics_dir, sbid, dest_folder, reporter, sched_info, obs_metadata)
 
     print ('\nProducing report to', dest_folder)
     output_html_report(reporter, dest_folder)

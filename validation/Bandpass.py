@@ -1,5 +1,5 @@
 # Library of routines for working with ASKAPsoft BPCAL data.
-# These are mostly focussed around plotting the bandpasses. Note thta bthis module requires CASA support.
+# These are mostly focussed around plotting the bandpasses. Note thta this module requires CASA support.
 
 # Author James Dempsey
 # Date 14 Aug 2020
@@ -144,6 +144,7 @@ def plot_bandpass_summary(bandpass, summary_axis, sbid, fig_folder):
 
     fname = fig_folder + '/bandpass_sb{}_by_{}.png'.format(sbid, tgt_name)
     fig.savefig(fname, bbox_inches='tight')
+    #fig.savefig(fname[:-3]+"pdf", bbox_inches='tight')
     return fname
 
 def plot_bandpass_by_antenna(bandpass, sbid, fig_folder):

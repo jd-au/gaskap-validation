@@ -29,6 +29,24 @@ class SchedulingInfo:
         self.cal_src = None
 
 
+class FieldMetadata:
+    def __init__(self):
+        self.id = None
+        self.name = None
+        self.ra = None
+        self.dec = None
+        self.num_rows = None
+
+
+class ObservationMetadata:
+    def __init__(self):
+        self.n_ant = None
+        self.start_obs_date = None
+        self.end_obs_date = None
+        self.tobs = None
+        self.fields = []
+        self.total_obs_bw = None
+
 def find_subdir(cube, image, name):
     potential_parent_dirs = []
     if cube:
@@ -194,36 +212,52 @@ def get_metadata(diagnostics_dir, verbose=False):
 
     nBlocks = 6  # these are the number of correlator cards (PILOT survey value)
     
+    obs_metadata = ObservationMetadata()
+
     obs_date = 'Observed from'
+    fields = 'Fields'
     code = 'Code'
     duration = 'Total elapsed time'
     antenna = 'antennas'
     frame = 'Frame'
     
+    field_list = []
+
     for i in range(len(lines)):
         line = lines[i]
         if line.find(antenna) >=0:
             toks = line.split()
-            n_ant = toks[5][-2:]
+            obs_metadata.n_ant = toks[5][-2:]
         if line.find(obs_date) >=0:
             toks = line.split()
-            start_obs_date = toks[6]
-            end_obs_date = toks[8]
+            obs_metadata.start_obs_date = toks[6]
+            obs_metadata.end_obs_date = toks[8]
         if line.find(duration) >=0:
             toks = line.split()
-            tobs = float(toks[10]) # in second
+            obs_metadata.tobs = float(toks[10]) # in second
+
+        # Field details
+        if line.find(fields) >=0:
+            toks = line.split()
+            obs_metadata.num_fields = int(toks[-1])
+
         if line.find(code) >= 0:
-            next_line = lines[i+1]
-            toks = next_line.split()
-            field = toks[5]
-            ra = toks[6][:-5]
-            dec = toks[7][:-4]
+            for j in range(obs_metadata.num_fields):
+                field_metadata = FieldMetadata()
+                field_line = lines[i+j+1]
+                toks = field_line.split()
+                field_metadata.name = toks[5]
+                field_metadata.ra = toks[6][:-5]
+                field_metadata.dec = toks[7][:-4]
+                field_metadata.num_rows = int(toks[9])
+                obs_metadata.fields.append(field_metadata)
+
         if line.find(frame) >= 0:
             next_line = lines[i+1]
             toks = next_line.split()
-            total_obs_bw = float(toks[10])*nBlocks/1000.0 # kHz to MHz 
+            obs_metadata.total_obs_bw = float(toks[10])*nBlocks/1000.0 # kHz to MHz 
             
-    return n_ant, start_obs_date, end_obs_date, tobs, field, ra, dec, total_obs_bw
+    return obs_metadata  #n_ant, start_obs_date, end_obs_date, tobs, field, ra, dec, total_obs_bw
 
 
 def _read_baselines():
@@ -451,12 +485,13 @@ def get_flagging_stats(diagnostics_dir, fig_folder, verbose=False):
 
 def calc_beam_exp_rms(flag_stat_beams, theoretical_rms_mjy):
     """
-    Calculating the theoretical RMS of individual beam by taking into account the flagged percentage. 
+    Calculate the theoretical RMS of individual beam by taking into account the flagged percentage. 
     Assuming same weighting for the non-flagged data. 
     """
 
     stats = np.asarray(flag_stat_beams)
-    beam_exp_rms = 1/np.sqrt(1.0 - stats/100.0)*theoretical_rms_mjy
+    beam_theoretical_rms = np.repeat(theoretical_rms_mjy, 36)
+    beam_exp_rms = 1/np.sqrt(1.0 - stats/100.0)*beam_theoretical_rms
     
     return beam_exp_rms
 
@@ -733,6 +768,7 @@ def plot_baselines(baseline_flag_pct, fig_folder, sbid, short_len=500, long_len=
     ax.xaxis.set_major_locator(majorXLocator)
     ax.xaxis.set_major_formatter(majorXFormatter)
     ax.xaxis.set_minor_locator(minorXLocator)
+    plt.legend(loc=0, fontsize=8)
 
     # Add a top axis of fringe separation    
     ax_top = ax.twiny()
@@ -750,9 +786,10 @@ def plot_baselines(baseline_flag_pct, fig_folder, sbid, short_len=500, long_len=
     ax.set_title('Baseline Flagging for SBID {}'.format(sbid) )
     ax.set_xlabel(r'UV Distance (m)')
     ax.set_ylabel(r'Baselines')
-    plt.legend(loc=0, fontsize=8)
+
     saved_fig = fig_folder+'/baselines.png'
     plt.savefig(saved_fig, bbox_inches='tight')
+    #plt.savefig(fig_folder+'/baselines.pdf', bbox_inches='tight')
     plt.close()
     print (saved_fig)
 
