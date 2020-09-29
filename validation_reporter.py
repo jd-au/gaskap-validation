@@ -6,6 +6,7 @@
 
 from astropy.table import Table
 from astropy.io.votable import from_table, writeto
+from astropy.io.votable.tree import Param
 
 class ReportSection(object):
     def __init__(self, title, target=None):
@@ -40,6 +41,8 @@ class ValidationReport(object):
         self.metrics_subtitle = metrics_subtitle
         self.sections = []
         self.metrics = []
+        self.project = None
+        self.sbid = None
 
     def add_section(self, section):
         self.sections.append(section)
@@ -134,8 +137,17 @@ def output_metrics_xml(reporter, dest_folder):
         values.append(metric.value)
         statuses.append(metric.status)
 
-    temp_table = Table([titles, descs, values, statuses], names=['metric_name', 'metric_description', 'metric_value', 'metric_status'])
+    temp_table = Table([titles, descs, values, statuses], names=['metric_name', 'metric_description', 'metric_value', 'metric_status'],
+        dtype=['str', 'str', 'double', 'int'])
     votable = from_table(temp_table)
-    filename = dest_folder + '/gaskap-metrics.vot'
+    table = votable.get_first_table()
+    if reporter.project:
+        table.params.append(Param(votable, name="project", datatype="char", arraysize="*", value=reporter.project))
+    if reporter.sbid:
+        table.params.append(Param(votable, name="sbid", datatype="char", arraysize="*", value=reporter.sbid))
+    table.get_field_by_id('metric_name').datatype = 'char'
+    table.get_field_by_id('metric_description').datatype = 'char'
+    table.get_field_by_id('metric_status').datatype = 'int'
+    filename = dest_folder + '/gaskap-metrics.xml'
     writeto(votable, filename)
     return

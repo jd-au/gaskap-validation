@@ -342,6 +342,8 @@ def report_observation(image, reporter, input_duration, sched_info, obs_metadata
     section.add_item('Footprint', value=footprint)
     section.add_item('{}<br/>({})'.format(spec_title, spectral_unit), value=spectral_range)
     reporter.add_section(section)
+
+    reporter.project = project
     return sbid
 
 
