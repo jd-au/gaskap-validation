@@ -7,6 +7,7 @@
 from astropy.table import Table
 from astropy.io.votable import from_table, writeto
 from astropy.io.votable.tree import Param
+import numpy as np
 
 class ReportSection(object):
     def __init__(self, title, target=None):
@@ -85,14 +86,7 @@ def _output_metrics(f, reporter):
     f.write('\n</tr>\n<table>')
     return
 
-def _output_section(f, section):
-    _output_report_table_header(f, section.title, target=section.target)
-    f.write('\n<tr>')
-    for item in section.items:
-        f.write('\n<th>{}</th>'.format(item.title))
-    f.write('\n</tr>\n<tr>')
-    for item in section.items:
-        f.write('\n<td>')
+def _output_single_item(f, item):
         if item.link:
             f.write('<a href="{}" target="_blank">'.format(item.link))
 
@@ -105,6 +99,39 @@ def _output_section(f, section):
 
         if item.link:
             f.write('</a>')
+
+def _output_multiple_link_item(f, item):
+    for idx, link in enumerate(item.link):
+        if idx > 0:
+            f.write('<br/>')
+        f.write('<a href="{}" target="_blank">'.format(item.link[idx]))
+        if item.value:
+            if np.ndim(item.value) == 0:
+                f.write(str(item.value))
+            else:
+                f.write(str(item.value[idx]))
+        elif item.image:
+            if np.ndim(item.image) == 0:
+                f.write('<img src="{}">'.format(item.image))
+            else:
+                f.write('<img src="{}">'.format(item.image[idx]))
+            
+        else:
+            f.write('&nbsp;')
+        f.write('</a>')
+
+def _output_section(f, section):
+    _output_report_table_header(f, section.title, target=section.target)
+    f.write('\n<tr>')
+    for item in section.items:
+        f.write('\n<th>{}</th>'.format(item.title))
+    f.write('\n</tr>\n<tr>')
+    for item in section.items:
+        f.write('\n<td>')
+        if item.link and np.ndim(item.link) > 0:
+            _output_multiple_link_item(f, item)
+        else:
+            _output_single_item(f, item)
         f.write('</td>')
     f.write('\n</tr>\n<table>')
     return

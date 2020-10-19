@@ -41,7 +41,7 @@ from spectral_cube import SpectralCube
 from statsmodels.tsa import stattools
 from statsmodels.graphics.tsaplots import plot_pacf
 
-from validation import Bandpass, Diagnostics, Spectra
+from validation import Bandpass, Diagnostics, SelfCal, Spectra
 from validation_reporter import ValidationReport, ReportSection, ReportItem, ValidationMetric, output_html_report, output_metrics_xml
 
 
@@ -1031,6 +1031,20 @@ def add_opt_image_section(title, image_path, fig_folder, dest_folder, section):
     image_path_rel = os.path.relpath(image_path, dest_folder)
     section.add_item(title, link=image_path_rel, image=img_thumb_rel)
 
+def add_opt_mult_image_section(title, image_paths, fig_folder, dest_folder, section):
+    if image_paths is None:
+        section.add_item(title, value='N/A')
+        return
+
+    rel_paths = []
+    rel_thumbs = []
+    for image_path in image_paths:
+        img_thumb, img_thumb_rel = Diagnostics.make_thumbnail(image_path, fig_folder, dest_folder)
+        image_path_rel = os.path.relpath(image_path, dest_folder)
+        rel_thumbs.append(img_thumb_rel)
+        rel_paths.append(image_path_rel)
+    section.add_item(title, link=rel_paths, image=rel_thumbs)
+
 
 def report_calibration(diagnostics_dir, dest_folder, reporter):
     print('\nReporting calibration from ' + diagnostics_dir)
@@ -1143,6 +1157,34 @@ def report_diagnostics(diagnostics_dir, sbid, dest_folder, reporter, sched_info,
     reporter.add_metric(metric)
 
 
+def report_self_cal(cube, image, obs_metadata, dest_folder, reporter):
+    print('\nReporting self calibration')
+
+    fig_folder= get_figures_folder(dest_folder)
+    field_plots = []
+    field_names = ""
+    for i,field in enumerate(obs_metadata.fields):
+        if i > 0:
+            field_names += '<br/>'
+        field_names += field.name
+        folder = Diagnostics.find_subdir(cube, image, field.name)
+        if folder:
+            plots = SelfCal.process_self_cal_set(folder, fig_folder)
+            field_plots.append(plots)
+        else:
+            field_plots.append([None, None])
+    plot_array = np.asarray(field_plots)
+    
+
+    # Output the report
+    section = ReportSection('Self Calibration', '')
+    section.add_item('Field(s)', value=field_names)
+    add_opt_mult_image_section('Phase Stability', plot_array[:,0], fig_folder, dest_folder, section)
+    add_opt_mult_image_section('Phase Summary', plot_array[:,1], fig_folder, dest_folder, section)
+    add_opt_mult_image_section('Amplitude Stability', plot_array[:,2], fig_folder, dest_folder, section)
+    reporter.add_section(section)
+
+
 def main():
     start = time.time()
     print("#### Started validation at {} ####".format(
@@ -1204,6 +1246,8 @@ def main():
     if diagnostics_dir:
         report_calibration(diagnostics_dir, dest_folder, reporter)
         report_diagnostics(diagnostics_dir, sbid, dest_folder, reporter, sched_info, obs_metadata)
+    if obs_metadata:
+        report_self_cal(args.cube, args.image, obs_metadata, dest_folder, reporter)
 
     print ('\nProducing report to', dest_folder)
     output_html_report(reporter, dest_folder)
