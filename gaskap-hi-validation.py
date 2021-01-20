@@ -1172,16 +1172,18 @@ def report_self_cal(cube, image, obs_metadata, dest_folder, reporter):
             plots = SelfCal.process_self_cal_set(folder, fig_folder)
             field_plots.append(plots)
         else:
-            field_plots.append([None, None])
+            field_plots.append([None, None, None])
     plot_array = np.asarray(field_plots)
-    
+    #if len(np.shape(plot_array)) == 1:
+    #    plot_array = np.reshape(plot_array, (1,np.shape(plot_array)[0]))
+    print (plot_array)    
 
     # Output the report
     section = ReportSection('Self Calibration', '')
     section.add_item('Field(s)', value=field_names)
     add_opt_mult_image_section('Phase Stability', plot_array[:,0], fig_folder, dest_folder, section)
     add_opt_mult_image_section('Phase Summary', plot_array[:,1], fig_folder, dest_folder, section)
-    add_opt_mult_image_section('Amplitude Stability', plot_array[:,2], fig_folder, dest_folder, section)
+    add_opt_mult_image_section('All Phases', plot_array[:,2], fig_folder, dest_folder, section)
     reporter.add_section(section)
 
 

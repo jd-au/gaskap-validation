@@ -249,6 +249,35 @@ def _plot_ant_phases(sc, field, outFile = None):
     plt.close()
 
 
+def _plot_all_phases(sc, field, outFile = None):
+    phases = np.angle(sc.selfcal, deg=True)
+    times = np.array(range(sc.nsol))
+
+    sns.set()
+    fig, axs = plt.subplots(6, 12, figsize=(40,16))
+    pols = ['XX', 'YY']
+    colours = sns.color_palette()
+
+    for i, pol in enumerate(pols):
+        for ant in range(36):
+            ax = axs[ant // 6, i*6+ant%6]
+            for beam in range(sc.nbeam):
+                ax.plot(times, phases[:,beam,ant,i], marker=None, label="beam %d" %(beam))
+            ax.set_ylim(-200.0, 200.0)
+            ax.set_title('Phases for ak%02d pol %s' % (ant+1, pol[i]))
+
+        #ax.set_xlabel(r'Time (Integration number)')
+    
+    #axs[0].legend()
+    axs[0,0].set_ylabel(r'Phase (deg)')
+
+    if outFile == None:
+        plt.show()
+    else:
+        plt.savefig(outFile, bbox_inches='tight', dpi=300)
+    plt.close()
+
+
 def _plot_amp_rms_map(sc, field, outFile = None):
     amplitudes = np.absolute(sc.selfcal)
     times = np.array(range(sc.nsol))
@@ -296,12 +325,12 @@ def process_self_cal_set(folder, fig_folder):
     field = os.path.basename(folder)
 
     rms_map_plot = fig_folder + '/sc_heatmap_{}.png'.format(field)  
-    amp_rms_map_plot = fig_folder + '/sc_amp_heatmap_{}.png'.format(field)  
     summary_plot = fig_folder + '/sc_summary_{}.png'.format(field)  
+    all_phases_plot = fig_folder + '/sc_phases_{}.png'.format(field)  
     _plot_rms_map(sc, field, rms_map_plot)
     _plot_summary_phases(sc, field, summary_plot)
-    _plot_amp_rms_map(sc, field, amp_rms_map_plot)
-    return rms_map_plot, summary_plot, amp_rms_map_plot
+    _plot_all_phases(sc, field, all_phases_plot)
+    return rms_map_plot, summary_plot, all_phases_plot
 
 
 def find_field_folder(cube, image, field_name):
