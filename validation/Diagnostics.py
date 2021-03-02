@@ -316,26 +316,33 @@ def _get_flagging(flagging_file, flag_ant_file, num_integ, n_chan, baseline_name
     integ_num_inner, integ_flag_inner, integ_num_outer, integ_flag_outer = 0, 0, 0, 0
     integ_baseline_count, integ_baseline_flag = np.zeros((len(baseline_names))), np.zeros((len(baseline_names)))
     num_integ_flagged = 0
+    print ('Processing ', flagging_file)
     with open(flagging_file, 'r') as f:
         for line in f:
             if "#" not in line:  # grep -v "#"
-                if "Flagged" not in line:   # grep -v "Flagged"
-                    tokens = line.split()
-                    ant1 = int(tokens[3])
-                    ant2 = int(tokens[4])
-                    flag = float(tokens[6])
-                    if (ant1 < ant2) and (flag == 100): 
-                        # extract non-correlated antenna pairs with 100 percent flagging
-                        integ_ant1.append(ant1)
-                        integ_ant2.append(ant2)
-                        integ_flag.append(flag)
-                    if ant1 < ant2:
-                        # Record flagging for each baseline
-                        base_name = '{}-{}'.format(ant1+1, ant2+1)
-                        base_idx = base_idx_map[base_name]
-                        integ_baseline_count[base_idx] += 1
-                        integ_baseline_flag[base_idx] += flag
-                        bad_chan_pct_count[int(flag)] += 1
+                if line.startswith('Flagged a total of'):
+                    flag_total_line = line
+                    continue
+                if "Flagged" in line:   # grep -v "Flagged"
+                    continue
+                tokens = line.split()
+                if len(tokens) < 7: # Skip by-channel summaries at the end of the file
+                    continue
+                ant1 = int(tokens[3])
+                ant2 = int(tokens[4])
+                flag = float(tokens[6])
+                if (ant1 < ant2) and (flag == 100): 
+                    # extract non-correlated antenna pairs with 100 percent flagging
+                    integ_ant1.append(ant1)
+                    integ_ant2.append(ant2)
+                    integ_flag.append(flag)
+                if ant1 < ant2:
+                    # Record flagging for each baseline
+                    base_name = '{}-{}'.format(ant1+1, ant2+1)
+                    base_idx = base_idx_map[base_name]
+                    integ_baseline_count[base_idx] += 1
+                    integ_baseline_flag[base_idx] += flag
+                    bad_chan_pct_count[int(flag)] += 1
             elif "# Integration Number:" in line:
                 tokens = line.split()
                 integ_num = int(tokens[3])
@@ -355,7 +362,6 @@ def _get_flagging(flagging_file, flag_ant_file, num_integ, n_chan, baseline_name
                 integ_baseline_count, integ_baseline_flag = np.zeros((len(baseline_names))), np.zeros((len(baseline_names)))
 
 
-    last_line = line
     exp_count = (num_integ - num_integ_flagged) * 35 # Number of unflagged integrations times number of non-autocorrelation baselines
 
     # Analyse the flagging data
@@ -388,9 +394,9 @@ def _get_flagging(flagging_file, flag_ant_file, num_integ, n_chan, baseline_name
     baseline_flag_pct = baseline_flag / baseline_count
 
     # Getting data flagged percentage from the last line of the summary
-    str_line = last_line
+    str_line = flag_total_line
     if isinstance(str_line, bytes):
-        str_line = last_line.decode('utf-8')
+        str_line = str_line.decode('utf-8')
     tokens = str_line.split()
     total_flagged_pct = float(tokens[-2]) #data+autocorrelation
     total_uv = float(tokens[7])
