@@ -40,6 +40,7 @@ from radio_beam import Beam
 from spectral_cube import SpectralCube
 from statsmodels.tsa import stattools
 from statsmodels.graphics.tsaplots import plot_pacf
+import seaborn as sns
 
 from validation import Bandpass, Diagnostics, SelfCal, Spectra
 from validation_reporter import ValidationReport, ReportSection, ReportItem, ValidationMetric, output_html_report, output_metrics_xml
@@ -104,13 +105,16 @@ def plot_histogram(file_prefix, xlabel, title):
     plt.close()
 
     
-def plot_map(file_prefix, title, cmap='magma', stretch='linear'):
+def plot_map(file_prefix, title, cmap='magma', stretch='linear', pmax=99.75, colorbar_label=None):
     gc = aplpy.FITSFigure(file_prefix+'.fits')
-    gc.show_colorscale(cmap=cmap, stretch=stretch)
+    gc.show_colorscale(cmap=cmap, stretch=stretch, pmax=pmax)
     gc.add_colorbar()
+    if colorbar_label:
+        gc.colorbar.set_axis_label_text(colorbar_label)
     gc.add_grid()
     gc.set_title(title)
     gc.savefig(filename=file_prefix+'.png')
+    gc.savefig(filename=file_prefix+'.pdf', dpi=100)
     gc.savefig(filename=file_prefix+'_sml.png', dpi=10 )
     gc.close()
 
@@ -499,9 +503,11 @@ def calc_theoretical_rms(chan_width, t_obs= 12*60*60, n_ant=36):
     rms : int
         Theoretical RMS in mJy
     """
-    cor_eff = 0.8    # correlator efficiency - WALLABY
+    #cor_eff = 0.8    # correlator efficiency - WALLABY
+    cor_eff = 1.0    # correlator efficiency - assumed to be included in the SEFD
     n_pol = 2.0      # Number of polarisation, npol = 2 for images in Stokes I, Q, U, or V
-    sefd = 1700*u.Jy # As measured in SB 9944
+    #sefd = 1700*u.Jy # As measured in SB 9944
+    sefd = 1800*u.Jy # Hotan et al 2021
     
     rms_jy = sefd/(cor_eff*math.sqrt(n_pol*n_ant*(n_ant-1)*chan_width*t_obs))
 
@@ -515,21 +521,6 @@ def measure_spectral_line_noise(slab, cube, vel_start, vel_end, reporter, dest_f
     if slab is None:
         print ("** No data for the non-emission range - skipping check **")
         return
-
-    # Extract the spectral line noise map
-    std_data = np.nanstd(slab.unmasked_data[:], axis=0)
-    mom0_prefix = build_fname(cube, '_mom0_off')
-    folder = get_figures_folder(dest_folder)
-    mom0_fname = folder + mom0_prefix + '.fits'
-    prefix = build_fname(cube, '_spectral_noise')
-    noise_fname = folder + prefix  + '.fits'
-    fits.writeto(noise_fname, std_data.value, fits.getheader(mom0_fname), overwrite=True)
-
-    # Produce the noise plots
-    cube_name = os.path.basename(cube)
-    plot_map(folder+prefix, "Spectral axis noise map for " + cube_name, cmap='plasma', stretch='arcsinh')
-    plot_histogram(folder+prefix, 'Noise level per channel (Jy beam^{-1})', 'Spectral axis noise for ' + cube_name)
-    median_noise = np.nanmedian(std_data.value[std_data.value!=0.0])
 
     # Extract header details
     hdr = fits.getheader(cube)
@@ -555,10 +546,28 @@ def measure_spectral_line_noise(slab, cube, vel_start, vel_end, reporter, dest_f
     #elif spec_unit == 'kHz':
     #    spec_res_km_s = spec_res_km_s/0.5*0.1 # 0.5 kHz = 0.1 km/s
 
-    median_noise_5kHz = median_noise / np.sqrt(1 / spec_res_km_s)
-    median_noise_5kHz *= 1000 # Jy => mJy
+    # Scale the noise to mJy / 5 kHz channel
+    std_data = np.nanstd(slab.unmasked_data[:], axis=0)
+    noise_5kHz = std_data / np.sqrt(1 / spec_res_km_s)
+    noise_5kHz = noise_5kHz.to(u.mJy) # Jy => mJy
+
+    # Extract the spectral line noise map
+    mom0_prefix = build_fname(cube, '_mom0_off')
+    folder = get_figures_folder(dest_folder)
+    mom0_fname = folder + mom0_prefix + '.fits'
+    prefix = build_fname(cube, '_spectral_noise')
+    noise_fname = folder + prefix  + '.fits'
+    fits.writeto(noise_fname, noise_5kHz.value, fits.getheader(mom0_fname), overwrite=True)
+
+    # Produce the noise plots
+    cube_name = os.path.basename(cube)
+    plot_map(folder+prefix, "Spectral axis noise map for " + cube_name, cmap='mako_r', stretch='arcsinh', 
+        colorbar_label=r'Noise level per 5 kHz channel (mJy beam$^{-1}$)')
+    plot_histogram(folder+prefix, r'Noise level per 5 kHz channel (mJy beam$^{-1}$)', 'Spectral axis noise for ' + cube_name)
+    median_noise_5kHz = np.nanmedian(noise_5kHz.value[noise_5kHz.value!=0.0])
 
     theoretical_gaskap_noise = calc_theoretical_rms(5000, t_obs=duration*60*60) # mJy per 5 kHz for the observation duration
+    print ("Theoretical noise {:.3f} mJy/beam".format(theoretical_gaskap_noise))
     median_ratio = median_noise_5kHz / theoretical_gaskap_noise
 
     # assess
