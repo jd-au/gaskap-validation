@@ -13,11 +13,17 @@ class ReportSection(object):
     def __init__(self, title, target=None):
         self.title = title
         self.target = target
-        self.items = []
+        self.items = {}
+        self.current_row = 0
+        self.items[self.current_row] = []
 
     def add_item(self, title, value=None, link=None, image=None):
         item = ReportItem(title, value, link, image)
-        self.items.append(item)
+        self.items[self.current_row].append(item)
+
+    def start_new_row(self):
+        self.current_row += 1
+        self.items[self.current_row] = []
 
 
 class ReportItem(object):
@@ -59,7 +65,8 @@ def _output_header(f, reporter):
     return
 
 def _output_report_table_header(f, title, target=None):
-    f.write('\n<h2 align="middle">{}</h2>'.format(title))
+    if title:
+        f.write('\n<h2 align="middle">{}</h2>'.format(title))
     if target:
         f.write('\n<h4 align="middle"><i>File: \'{}\'</i></h4>'.format(target))
     f.write('\n<table class="reportTable">')
@@ -121,19 +128,22 @@ def _output_multiple_link_item(f, item):
         f.write('</a>')
 
 def _output_section(f, section):
-    _output_report_table_header(f, section.title, target=section.target)
-    f.write('\n<tr>')
-    for item in section.items:
-        f.write('\n<th>{}</th>'.format(item.title))
-    f.write('\n</tr>\n<tr>')
-    for item in section.items:
-        f.write('\n<td>')
-        if item.link and np.ndim(item.link) > 0:
-            _output_multiple_link_item(f, item)
-        else:
-            _output_single_item(f, item)
-        f.write('</td>')
-    f.write('\n</tr>\n<table>')
+    for idx in range(section.current_row+1):
+        _output_report_table_header(f, section.title if idx == 0 else None, target=section.target)
+        items = section.items[idx]
+        f.write('\n<tr>')
+        for item in items:
+            f.write('\n<th>{}</th>'.format(item.title))
+        f.write('\n</tr>\n<tr>')
+        for item in items:
+            f.write('\n<td>')
+            if item.link and np.ndim(item.link) > 0:
+                _output_multiple_link_item(f, item)
+            else:
+                _output_single_item(f, item)
+            f.write('</td>')
+        f.write('\n</tr>')
+        f.write('\n<table>')
     return
 
 def _output_footer(f, reporter):

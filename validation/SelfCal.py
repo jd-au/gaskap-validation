@@ -17,6 +17,8 @@ from casacore.tables import *
 import seaborn as sns
 
 class SelfCalSolutions:
+      # phase is [time, beam, ant, pol]
+
     def __init__(self):
         """Initialises parameters for reading a selfcal table
         """
@@ -24,9 +26,11 @@ class SelfCalSolutions:
         self.nant = None
         self.nbeam = 36
         self.npol = None
+        # selfcal is an array in order [time, beam, ant, pol] of phase angle and amplitude value
         self.selfcal = None
         self.selfcal_times = None
         self.selfcal_flags = None
+        self.field = None
 
     def load(self, base_dir):
         flist = glob.glob(base_dir + "/cont_gains*tab")
@@ -63,6 +67,7 @@ class SelfCalSolutions:
                 self.selfcal[index, beam] = sc_vals[index, 0, :, :]
                 self.selfcal_flags[index, beam] = np.invert(flag_vals[index, 0, :, :])
         self.selfcal[np.where(self.selfcal_flags)] = np.nan
+        self.field = os.path.basename(base_dir)
         print("Read %d solutions, %d antennas, %d beams, %d polarisations" %(self.nsol, self.nant, self.nbeam, self.npol))
                 
     def plotGains(self, ant, outFile = None):
@@ -305,14 +310,33 @@ def _plot_amp_rms_map(sc, field, outFile = None):
     plt.close()
 
 
-def process_self_cal_set(folder, fig_folder):
+def prepare_self_cal_set(folder):
     """
-    Produce plots for a set of self calibration solutions for a field.
+    Prepare a set of self cal solutions for analysis.
 
     Parameters
     ----------
     folder: path
         Path to the folder containing the self cal solution files. Normally named after the field/interleave.
+
+    Returns
+    -------
+    The SelfCalSolutions object for use by other calls.
+    """
+    sc = SelfCalSolutions()
+    sc.load(folder)
+    return sc
+
+
+
+def plot_self_cal_set(sc, fig_folder):
+    """
+    Produce plots for a set of self calibration solutions for a field.
+
+    Parameters
+    ----------
+    sc: SelfCalSolutions
+        The loaded self cal solutions object for the field/interleave.
     fig_folder: string
         Path to the folder we should put any plots or reports in.
 
@@ -320,17 +344,45 @@ def process_self_cal_set(folder, fig_folder):
     -------
     The paths to the RMS map plot and the summary plot produced for this field.
     """
-    sc = SelfCalSolutions()
-    sc.load(folder)
-    field = os.path.basename(folder)
-
-    rms_map_plot = fig_folder + '/sc_heatmap_{}.png'.format(field)  
-    summary_plot = fig_folder + '/sc_summary_{}.png'.format(field)  
-    all_phases_plot = fig_folder + '/sc_phases_{}.png'.format(field)  
-    _plot_rms_map(sc, field, rms_map_plot)
-    _plot_summary_phases(sc, field, summary_plot)
-    _plot_all_phases(sc, field, all_phases_plot)
+    rms_map_plot = fig_folder + '/sc_heatmap_{}.png'.format(sc.field)  
+    summary_plot = fig_folder + '/sc_summary_{}.png'.format(sc.field)  
+    all_phases_plot = fig_folder + '/sc_phases_{}.png'.format(sc.field)  
+    _plot_rms_map(sc, sc.field, rms_map_plot)
+    _plot_summary_phases(sc, sc.field, summary_plot)
+    _plot_all_phases(sc, sc.field, all_phases_plot)
     return rms_map_plot, summary_plot, all_phases_plot
+
+
+def calc_phase_stability(sc, phase_rms_max=40):
+    """
+    Calculate summary statistics of the phase stability as recorded in the self-cal solution.
+
+    Parameters
+    ----------
+    sc: SelfCalSolutions
+        The loaded self cal solutions object for the field/interleave.
+    phase_rms_max: double
+        The maximum allowed median rms before a beam or antenna is classified as bad.
+
+    Returns
+    -------
+    The number of bad beams and bad antennas.
+    """
+    phases = np.angle(sc.selfcal, deg=True)
+    times = np.array(range(sc.nsol))
+    rms = np.std(phases[:,:,:,:], axis=0)
+    # phase is [time, beam, ant, pol]
+
+    bad_beams = []
+    bad_ant = []
+    for i in range(2): # polarisations XX and YY
+        bad_ant.append(np.median(rms[:,:,i], axis=0) >= phase_rms_max)
+        bad_beams.append(np.median(rms[:,:,i], axis=1) >= phase_rms_max)
+    bad_ant_either = bad_ant[0] | bad_ant[1]
+    bad_beam_either = bad_beams[0] | bad_beams[1]
+    print('ants', bad_ant_either)
+    print('beams', bad_beam_either)
+    return np.sum(bad_beam_either), np.sum(bad_ant_either)
 
 
 def find_field_folder(cube, image, field_name):

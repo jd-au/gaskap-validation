@@ -1031,16 +1031,17 @@ def copy_existing_image(image_pattern, fig_folder):
     shutil.copyfile(paths[0], new_name)
     return new_name
 
-def add_opt_image_section(title, image_path, fig_folder, dest_folder, section):
+def add_opt_image_section(title, image_path, fig_folder, dest_folder, section, thumb_size_x=140, thumb_size_y=140):
     if image_path == None:
         section.add_item(title, value='N/A')
         return
     
-    img_thumb, img_thumb_rel = Diagnostics.make_thumbnail(image_path, fig_folder, dest_folder)
+    img_thumb, img_thumb_rel = Diagnostics.make_thumbnail(image_path, fig_folder, dest_folder, size_x=thumb_size_y, 
+        size_y=thumb_size_y)
     image_path_rel = os.path.relpath(image_path, dest_folder)
     section.add_item(title, link=image_path_rel, image=img_thumb_rel)
 
-def add_opt_mult_image_section(title, image_paths, fig_folder, dest_folder, section):
+def add_opt_mult_image_section(title, image_paths, fig_folder, dest_folder, section, thumb_size_x=140, thumb_size_y=140):
     if image_paths is None:
         section.add_item(title, value='N/A')
         return
@@ -1048,7 +1049,8 @@ def add_opt_mult_image_section(title, image_paths, fig_folder, dest_folder, sect
     rel_paths = []
     rel_thumbs = []
     for image_path in image_paths:
-        img_thumb, img_thumb_rel = Diagnostics.make_thumbnail(image_path, fig_folder, dest_folder)
+        img_thumb, img_thumb_rel = Diagnostics.make_thumbnail(image_path, fig_folder, dest_folder, 
+            size_x=thumb_size_x, size_y=thumb_size_y)
         image_path_rel = os.path.relpath(image_path, dest_folder)
         rel_thumbs.append(img_thumb_rel)
         rel_paths.append(image_path_rel)
@@ -1081,7 +1083,7 @@ def report_calibration(diagnostics_dir, dest_folder, reporter):
     section = ReportSection('Calibration', '')
     section.add_item('Cal SBID', cal_sbid)
     add_opt_image_section('Bandpass by Antenna', bp_by_ant_fig, fig_folder, dest_folder, section)
-    section.add_item('Bandpass by Beam', link=bp_by_beam_fig_rel, image=bp_by_beam_thumb_rel)
+    add_opt_image_section('Bandpass by Beam', bp_by_beam_fig, fig_folder, dest_folder, section)
     add_opt_image_section('Amplitude Diagnostics', amp_diag_img, fig_folder, dest_folder, section)
     add_opt_image_section('Phase Diagnostics', phase_diag_img, fig_folder, dest_folder, section)
     if cal_param_pdf_rel:
@@ -1112,6 +1114,7 @@ def report_diagnostics(diagnostics_dir, sbid, dest_folder, reporter, sched_info,
     flagged_ant_desc = ", ".join(ant_flagged_in_all) if len(ant_flagged_in_all) > 0 else 'None'
     pct_short_base_flagged, pct_medium_base_flagged, pct_long_base_flagged = Diagnostics.calc_flag_percent(
         baseline_flag_pct, short_len=short_len, long_len=long_len)
+    pct_chan_unflagged = Diagnostics.calc_pct_channels_unflagged(bad_chan_pct_count)
 
     # Extract beam RMS
     beam_exp_rms = Diagnostics.calc_beam_exp_rms(flag_stat_beams, theoretical_rms_mjy)
@@ -1137,16 +1140,17 @@ def report_diagnostics(diagnostics_dir, sbid, dest_folder, reporter, sched_info,
     section = ReportSection('Diagnostics', '')
     section.add_item('Completely Flagged Antennas', flagged_ant_desc, link=flag_ant_file_rel)
     section.add_item('Integrations Completely<br/>Flagged (%)', pct_integ_flagged)
-    add_opt_image_section('Flagging over Time', integ_flag_fig, fig_folder, dest_folder, section)
-    add_opt_image_section('Flagging Distribution', flag_pct_dist_fig, fig_folder, dest_folder, section)
+    add_opt_image_section('Flagging over Time', integ_flag_fig, fig_folder, dest_folder, section) #, thumb_size_x=70, thumb_size_y=70)
+    add_opt_image_section('Channel Flagging', flag_pct_dist_fig, fig_folder, dest_folder, section) #, thumb_size_x=70, thumb_size_y=70)
     section.add_item('Short Baselines<br/>Flagged (%)', pct_short_base_flagged)
     section.add_item('Medium Baselines<br/>Flagged (%)', pct_medium_base_flagged)
     section.add_item('Long Baselines<br/>Flagged (%)', pct_long_base_flagged)
-    add_opt_image_section('Baselines', baseline_fig, fig_folder, dest_folder, section)
+    add_opt_image_section('Baselines', baseline_fig, fig_folder, dest_folder, section) #, thumb_size_x=70, thumb_size_y=70)
+    section.start_new_row()
     section.add_item('Channel Width (kHz)', chan_width_kHz)
-    add_opt_image_section('Flagged Visibilities', flagged_vis_fig, fig_folder, dest_folder, section)
-    add_opt_image_section('Flagged Antennas', flagged_ant_fig, fig_folder, dest_folder, section)
-    add_opt_image_section('Expected RMS per channel', beam_exp_rms_fig, fig_folder, dest_folder, section)
+    add_opt_image_section('Flagged Visibilities', flagged_vis_fig, fig_folder, dest_folder, section) #, thumb_size_x=140, thumb_size_y=70)
+    add_opt_image_section('Flagged Antennas', flagged_ant_fig, fig_folder, dest_folder, section) #, thumb_size_x=70, thumb_size_y=70)
+    add_opt_image_section('Expected RMS per channel', beam_exp_rms_fig, fig_folder, dest_folder, section) #, thumb_size_x=70, thumb_size_y=70)
     reporter.add_section(section)
 
     metric = ValidationMetric('Flagged Short Baselines', 
@@ -1158,6 +1162,11 @@ def report_diagnostics(diagnostics_dir, sbid, dest_folder, reporter, sched_info,
         'Percent of long baselines ({}m or more) flagged across all integrations and all beams'.format(long_len),
         pct_long_base_flagged, assess_metric(pct_long_base_flagged, 
         30, 45, low_good=True))
+    reporter.add_metric(metric)
+    metric = ValidationMetric('Unflagged Integrations', 
+        'Percent of integrations with less than 5% of channels flagged',
+        pct_chan_unflagged, assess_metric(pct_chan_unflagged, 
+        70, 50))
     reporter.add_metric(metric)
     metric = ValidationMetric('Expected RMS Variance', 
         'The percentage variance of expected RMS across the field.',
@@ -1172,20 +1181,26 @@ def report_self_cal(cube, image, obs_metadata, dest_folder, reporter):
     fig_folder= get_figures_folder(dest_folder)
     field_plots = []
     field_names = ""
+    total_bad_beams = 0
+    max_bad_ant = 0
+
     for i,field in enumerate(obs_metadata.fields):
         if i > 0:
             field_names += '<br/>'
         field_names += field.name
         folder = Diagnostics.find_subdir(cube, image, field.name)
         if folder:
-            plots = SelfCal.process_self_cal_set(folder, fig_folder)
+            sc = SelfCal.prepare_self_cal_set(folder)
+            plots = SelfCal.plot_self_cal_set(sc, fig_folder)
             field_plots.append(plots)
+            num_bad_beams, num_bad_ant = SelfCal.calc_phase_stability(sc)
+            print("In field {} found {} bad beams and {} bad antennas".format(field.name, num_bad_beams, num_bad_ant))
+            total_bad_beams += num_bad_beams
+            max_bad_ant = max(max_bad_ant, num_bad_ant)
         else:
             field_plots.append([None, None, None])
     plot_array = np.asarray(field_plots)
-    #if len(np.shape(plot_array)) == 1:
-    #    plot_array = np.reshape(plot_array, (1,np.shape(plot_array)[0]))
-    print (plot_array)    
+    print ("Overall found {} bad beams and {} bad antennas.".format(total_bad_beams, max_bad_ant))
 
     # Output the report
     section = ReportSection('Self Calibration', '')
@@ -1194,6 +1209,12 @@ def report_self_cal(cube, image, obs_metadata, dest_folder, reporter):
     add_opt_mult_image_section('Phase Summary', plot_array[:,1], fig_folder, dest_folder, section)
     add_opt_mult_image_section('All Phases', plot_array[:,2], fig_folder, dest_folder, section)
     reporter.add_section(section)
+
+    metric = ValidationMetric('Bad Phase Antenna', 
+        'Number of unflagged antenna with bad phase solutions',
+        max_bad_ant, assess_metric(max_bad_ant, 
+        1, 3, low_good=True))
+    reporter.add_metric(metric)
 
 
 def main():

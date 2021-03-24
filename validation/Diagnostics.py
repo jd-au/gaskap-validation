@@ -876,6 +876,31 @@ def plot_flagging_distribution(bad_chan_pct_count, sbid, fig_folder):
     return saved_fig
 
 
+def calc_pct_channels_unflagged(bad_chan_pct_count, max_flag_pct=5):
+    """
+    Calculate the percentage of integrations with no flagged channels.
+
+    Parameters
+    ----------
+    bad_chan_pct_count : ndarray
+        Array of count of integrations flagged by each percentage step (0-100 inclusive). This does not include fully 
+        flagged integrations
+
+    Returns
+    -------
+    The percentage of intergrations with no channels flagged
+    """
+    fraction = bad_chan_pct_count / np.sum(bad_chan_pct_count)
+    percent = np.arange(0, 101)
+    has_contents = fraction > 0
+    print (percent[has_contents])
+    print (fraction[has_contents])
+    print (bad_chan_pct_count[has_contents])
+    pct_channels_unflagged = round(np.sum(fraction[0:max_flag_pct])*100,1)
+    return pct_channels_unflagged
+
+
+
 def get_sched_info(image):
     """
     Retrieve the scheduling info from the observation metadata.
