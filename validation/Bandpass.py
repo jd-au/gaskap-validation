@@ -109,7 +109,7 @@ def plot_bandpass_summary(bandpass, summary_axis, sbid, fig_folder):
     sns.set()
     sns.set_context("paper")
 
-    fig, axs = plt.subplots(1, 2, figsize=(14,8))
+    fig, axs = plt.subplots(1, 2, figsize=(14,8), sharey=True)
 
     tgt_name = 'beam' if summary_axis == 1 else 'antenna'
     x_means, y_means = get_median_bandpasses(bandpass, summary_axis)
@@ -138,8 +138,8 @@ def plot_bandpass_summary(bandpass, summary_axis, sbid, fig_folder):
     ax1.set_title("Median YY bandpass for each " + tgt_name)
     fig.suptitle("Bandpass for SBID {}".format(sbid))
 
+    axs[0].set_ylabel("Amplitude (Jy)")
     for i in range(2):
-        axs[i].set_ylabel("Amplitude (Jy)")
         axs[i].set_xlabel("Channel")
 
     fname = fig_folder + '/bandpass_sb{}_by_{}.png'.format(sbid, tgt_name)
