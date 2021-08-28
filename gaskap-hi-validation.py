@@ -106,16 +106,18 @@ def plot_histogram(file_prefix, xlabel, title):
 
     
 def plot_map(file_prefix, title, cmap='magma', stretch='linear', pmax=99.75, colorbar_label=None):
-    gc = aplpy.FITSFigure(file_prefix+'.fits')
+    fig = plt.figure(figsize=(5, 4.5))
+
+    gc = aplpy.FITSFigure(file_prefix+'.fits', figure=fig)
     gc.show_colorscale(cmap=cmap, stretch=stretch, pmax=pmax)
     gc.add_colorbar()
     if colorbar_label:
         gc.colorbar.set_axis_label_text(colorbar_label)
     gc.add_grid()
     gc.set_title(title)
-    gc.savefig(filename=file_prefix+'.png')
+    gc.savefig(filename=file_prefix+'.png', dpi=200)
     gc.savefig(filename=file_prefix+'.pdf', dpi=100)
-    gc.savefig(filename=file_prefix+'_sml.png', dpi=10 )
+    gc.savefig(filename=file_prefix+'_sml.png', dpi=16 )
     gc.close()
 
 
@@ -273,6 +275,31 @@ def get_spectral_units(ctype, cunit, hdr):
     return spectral_unit, spectral_conversion
 
 
+def calc_velocity_res(hdr):
+    spec_sys = hdr['SPECSYS']
+    axis = '3' if hdr['CTYPE3'] != 'STOKES' else '4'
+    spec_type = hdr['CTYPE'+axis]
+
+    spectral_unit, spectral_conversion = get_spectral_units(spec_type, 'CUNIT'+axis, hdr)
+    if 'CUNIT'+axis in hdr.keys():
+        spec_unit = hdr['CUNIT'+axis]
+    #elif spec_type == 'VRAD' or spec_type == 'VEL':
+    #    spec_unit = 'm/s'
+    else:
+        spec_unit = None
+    spec_delt = hdr['CDELT'+axis]
+    print ('CDELT={}, CUNIT={}, spec_unit={}, conversion={}'.format(spec_delt, spec_unit, spectral_unit, spectral_conversion))
+
+    spec_res_km_s = np.abs(spec_delt) / spectral_conversion
+    if spectral_unit == 'MHz':
+        spec_res_km_s = spec_res_km_s/5e-4*0.1 # 0.5 kHz = 0.1 km/s
+    #elif spec_unit == 'Hz':
+    #        spec_res_km_s = spec_res_km_s/500*0.1 # 0.5 kHz = 0.1 km/s
+    #elif spec_unit == 'kHz':
+    #    spec_res_km_s = spec_res_km_s/0.5*0.1 # 0.5 kHz = 0.1 km/s
+    return spec_res_km_s
+
+
 def report_observation(image, reporter, input_duration, sched_info, obs_metadata):
     print('\nReporting observation based on ' + image)
 
@@ -402,6 +429,9 @@ def check_for_emission(cube, vel_start, vel_end, reporter, dest_folder, ncores=8
         return
 
     num_channels = slab.shape[0]
+    hdr = fits.getheader(cube)
+    spec_res_km_s = calc_velocity_res(hdr)
+
     mom0 = slab.moment0()
     prefix = build_fname(cube, '_mom0')
     folder = get_figures_folder(dest_folder)
@@ -420,6 +450,7 @@ def check_for_emission(cube, vel_start, vel_end, reporter, dest_folder, ncores=8
 
     hi_data = fits.open(folder + prefix+'_bkg.fits')
     max_em = np.nanmax(hi_data[0].data)
+    max_em_per_kms = max_em / (spec_res_km_s * num_channels)
 
     # assess
     cube_name = os.path.basename(cube)
@@ -428,12 +459,12 @@ def check_for_emission(cube, vel_start, vel_end, reporter, dest_folder, ncores=8
     section.add_item('Channels', value='{}'.format(num_channels))
     section.add_item('Large Scale<br/>Emission Map', link=rel_map_page, image='figures/'+prefix+'_bkg_sml.png')
     section.add_item('Emission Histogram', link='figures/'+prefix+'_bkg_hist.png', image='figures/'+prefix+'_bkg_hist_sml.png')
-    section.add_item('Max Emission<br/>(Jy km s<sup>-1</sup> beam<sup>-1</sup>)', value='{:.3f}'.format(max_em))
+    section.add_item('Max Emission<br/>(Jy beam<sup>-1</sup>)', value='{:.3f}'.format(max_em_per_kms))
     reporter.add_section(section)
 
     metric = ValidationMetric('Presence of Emission', 
         'Maximum large scale emission intensity in the velocity range where emission is expected.',
-        int(max_em), assess_metric(max_em, 800, 1000))
+        int(max_em_per_kms), assess_metric(max_em_per_kms, 12, 20))
     reporter.add_metric(metric)
     return
 
@@ -448,6 +479,9 @@ def check_for_non_emission(cube, vel_start, vel_end, reporter, dest_folder, ncor
         return None
 
     num_channels = slab.shape[0]
+    hdr = fits.getheader(cube)
+    spec_res_km_s = calc_velocity_res(hdr)
+
     mom0 = slab.moment0()
     prefix = build_fname(cube, '_mom0_off')
     folder = get_figures_folder(dest_folder)
@@ -466,6 +500,7 @@ def check_for_non_emission(cube, vel_start, vel_end, reporter, dest_folder, ncor
 
     hi_data = fits.open(folder+prefix+'_bkg.fits')
     max_em = np.nanmax(hi_data[0].data)
+    max_em_per_kms = max_em / (spec_res_km_s * num_channels)
 
     # assess
     cube_name = os.path.basename(cube)
@@ -474,12 +509,12 @@ def check_for_non_emission(cube, vel_start, vel_end, reporter, dest_folder, ncor
     section.add_item('Channels', value='{}'.format(num_channels))
     section.add_item('Large Scale<br/>Emission Map', link=rel_map_page, image='figures/'+prefix+'_bkg_sml.png')
     section.add_item('Emission Histogram', link='figures/'+prefix+'_bkg_hist.png', image='figures/'+prefix+'_bkg_hist_sml.png')
-    section.add_item('Max Emission<br/>(Jy km s<sup>-1</sup> beam<sup>-1</sup>)', value='{:.3f}'.format(max_em))
+    section.add_item('Max Emission<br/>(Jy beam<sup>-1</sup>)', value='{:.3f}'.format(max_em_per_kms))
     reporter.add_section(section)
 
     metric = ValidationMetric('Absence of Off-line Emission', 
         'Maximum large scale emission intensity in the velocity range where emission is not expected.',
-        int(max_em), assess_metric(max_em, 200, 500, low_good=True))
+        int(max_em_per_kms), assess_metric(max_em_per_kms, 5, 12, low_good=True))
     reporter.add_metric(metric)
     return slab
 
@@ -525,26 +560,11 @@ def measure_spectral_line_noise(slab, cube, vel_start, vel_end, reporter, dest_f
     # Extract header details
     hdr = fits.getheader(cube)
     spec_sys = hdr['SPECSYS']
-    axis = '3' if hdr['CTYPE3'] != 'STOKES' else '4'
-    spec_type = hdr['CTYPE'+axis]
-    spectral_unit, spectral_conversion = get_spectral_units(spec_type, 'CUNIT'+axis, hdr)
-    if 'CUNIT'+axis in hdr.keys():
-        spec_unit = hdr['CUNIT'+axis]
-    #elif spec_type == 'VRAD' or spec_type == 'VEL':
-    #    spec_unit = 'm/s'
-    else:
-        spec_unit = None
-    spec_delt = hdr['CDELT'+axis]
-    print ('CDELT={}, CUNIT={}, spec_unit={}, conversion={}'.format(spec_delt, spec_unit, spectral_unit, spectral_conversion))
+    axis_num = '3' if hdr['CTYPE3'] != 'STOKES' else '4'
+    spec_type = hdr['CTYPE'+axis_num]
 
     axis = spec_sys + ' ' + spec_type
-    spec_res_km_s = np.abs(spec_delt) / spectral_conversion
-    if spectral_unit == 'MHz':
-        spec_res_km_s = spec_res_km_s/5e-4*0.1 # 0.5 kHz = 0.1 km/s
-    #elif spec_unit == 'Hz':
-    #        spec_res_km_s = spec_res_km_s/500*0.1 # 0.5 kHz = 0.1 km/s
-    #elif spec_unit == 'kHz':
-    #    spec_res_km_s = spec_res_km_s/0.5*0.1 # 0.5 kHz = 0.1 km/s
+    spec_res_km_s = calc_velocity_res(hdr)
 
     # Scale the noise to mJy / 5 kHz channel
     std_data = np.nanstd(slab.unmasked_data[:], axis=0)
