@@ -1068,13 +1068,19 @@ def add_opt_mult_image_section(title, image_paths, fig_folder, dest_folder, sect
 
     rel_paths = []
     rel_thumbs = []
+    found = False
     for image_path in image_paths:
-        img_thumb, img_thumb_rel = Diagnostics.make_thumbnail(image_path, fig_folder, dest_folder, 
-            size_x=thumb_size_x, size_y=thumb_size_y)
-        image_path_rel = os.path.relpath(image_path, dest_folder)
-        rel_thumbs.append(img_thumb_rel)
-        rel_paths.append(image_path_rel)
-    section.add_item(title, link=rel_paths, image=rel_thumbs)
+        if image_path:
+            found = True
+            img_thumb, img_thumb_rel = Diagnostics.make_thumbnail(image_path, fig_folder, dest_folder, 
+                size_x=thumb_size_x, size_y=thumb_size_y)
+            image_path_rel = os.path.relpath(image_path, dest_folder)
+            rel_thumbs.append(img_thumb_rel)
+            rel_paths.append(image_path_rel)
+    if found:
+        section.add_item(title, link=rel_paths, image=rel_thumbs)
+    else:
+        section.add_item(title, value='N/A')
 
 
 def report_calibration(diagnostics_dir, dest_folder, reporter):
@@ -1085,11 +1091,11 @@ def report_calibration(diagnostics_dir, dest_folder, reporter):
     bandpass, cal_sbid = Bandpass.get_cal_bandpass(diagnostics_dir)
 
     # Plot bandpasses
-    bp_by_ant_fig = Bandpass.plot_bandpass_by_antenna(bandpass, cal_sbid, fig_folder)
+    bp_by_ant_fig = Bandpass.plot_bandpass_by_antenna(bandpass, cal_sbid, fig_folder, 'Calibration')
     #bp_by_ant_thumb, bp_by_ant_thumb_rel = Diagnostics.make_thumbnail(bp_by_ant_fig, fig_folder, dest_folder)
     #bp_by_ant_fig_rel = os.path.relpath(bp_by_ant_fig, dest_folder)
 
-    bp_by_beam_fig = Bandpass.plot_bandpass_by_beam(bandpass, cal_sbid, fig_folder)
+    bp_by_beam_fig = Bandpass.plot_bandpass_by_beam(bandpass, cal_sbid, fig_folder, 'Calibration')
     bp_by_beam_thumb, bp_by_beam_thumb_rel = Diagnostics.make_thumbnail(bp_by_beam_fig, fig_folder, dest_folder)
     bp_by_beam_fig_rel = os.path.relpath(bp_by_beam_fig, dest_folder)
 
@@ -1188,8 +1194,8 @@ def report_diagnostics(diagnostics_dir, sbid, dest_folder, reporter, sched_info,
         pct_chan_unflagged, assess_metric(pct_chan_unflagged, 
         70, 50))
     reporter.add_metric(metric)
-    metric = ValidationMetric('Expected RMS Variance', 
-        'The percentage variance of expected RMS across the field.',
+    metric = ValidationMetric('Expected RMS Difference', 
+        'The percentage change of expected RMS across the field.',
         rms_range_pct, assess_metric(rms_range_pct, 
         10, 30, low_good=True))
     reporter.add_metric(metric)
