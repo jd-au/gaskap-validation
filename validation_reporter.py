@@ -177,6 +177,7 @@ def output_metrics_xml(reporter, dest_folder):
     temp_table = Table([titles, descs, values, statuses], names=['metric_name', 'metric_description', 'metric_value', 'metric_status'],
         dtype=['str', 'str', 'double', 'int'])
     votable = from_table(temp_table)
+    votable.version = "1.3"
     table = votable.get_first_table()
     if reporter.project:
         table.params.append(Param(votable, name="project", datatype="char", arraysize="*", value=reporter.project))
