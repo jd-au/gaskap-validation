@@ -1244,6 +1244,9 @@ def report_self_cal(cube, image, obs_metadata, dest_folder, reporter):
 
 
 def main():
+    # Parse command line options
+    args = parseargs()
+
     start = time.time()
     print("#### Started validation at {} ####".format(
           (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start)))))
@@ -1251,8 +1254,6 @@ def main():
     #ignore astropy warnings 
     warnings.simplefilter('ignore', AstropyWarning)   
 
-    # Parse command line options
-    args = parseargs()
     dest_folder = args.output
     if not os.path.exists(dest_folder):
         os.makedirs(dest_folder)
