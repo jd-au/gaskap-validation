@@ -26,11 +26,12 @@ matplotlib.use('agg')
 
 import aplpy
 from astropy.constants import k_B
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import solar_system_ephemeris, EarthLocation, Angle, SkyCoord, AltAz, FK5, get_body
 from astropy.io import ascii, fits
 from astropy.io.votable import parse, from_table, writeto
 from astropy.io.votable.tree import Info
 from astropy.table import Table, Column
+from astropy.time import Time, TimezoneInfo
 import astropy.units as u
 from astropy.utils.exceptions import AstropyWarning
 from astropy.wcs import WCS
@@ -172,7 +173,7 @@ def convert_slab_to_jy(slab, header):
     elif 'RESTFRQ' in header.keys():
         restfreq = header['RESTFRQ']*u.Hz
 
-    if slab.unmasked_data[0,0,0].unit != u.Jy:
+    if slab.unmasked_data[0,0,0].unit != u.Jy and slab.unmasked_data[0,0,0].unit != u.Jy/u.beam:
         print ("Converting slab from {} to Jy".format(slab.unmasked_data[0,0,0].unit) )
         print (slab)
         slab.allow_huge_operations=True
@@ -300,7 +301,78 @@ def calc_velocity_res(hdr):
     return spec_res_km_s
 
 
-def report_observation(image, reporter, input_duration, sched_info, obs_metadata):
+def get_observing_location():
+    # Coordinates for Inyarrimanha Ilgari Bundara, the CSIRO Murchison Radio-astronomy Observatory
+    latitude = Angle("-26:41:46.0", unit=u.deg)
+    longitude = Angle("116:38:13.0", unit=u.deg)
+    return EarthLocation(lat=latitude, lon=longitude)
+
+
+def plot_solar_elevation(fig_folder, obs_time_utc, duration, field_pos, sbid):
+    obs_end_utc = obs_time_utc + duration
+    tmjd = np.arange(obs_time_utc.mjd, obs_end_utc.mjd, 1./24.0/60.0/6.0)
+    times = Time(tmjd, format='mjd', scale='utc')
+
+    observing_location = get_observing_location()
+
+    solar_system_ephemeris.set('builtin')
+    sun_sc = get_body("sun", times, location=observing_location)
+    #sun_sc_median = get_body("sun", Time(np.median(tmjd), format='mjd', scale='utc'), location=observing_location)
+
+    sun_altaz = sun_sc.transform_to(AltAz(obstime=times, location=observing_location))
+    sun_altdeg = sun_altaz.alt.deg
+    field_sun_sep_deg = sun_sc.separation(field_pos).degree
+
+    sns.set()
+    fig = plt.figure()
+    ax1 = fig.add_subplot(111)
+    plot, = ax1.plot((tmjd-tmjd[0])*24.0, sun_altdeg, marker='None', color="black")
+    #print("Solar position = %s" %(sun_sc_median.to_string(style='hmsdms')))
+    ax1.set_title("Solar elevation for SBID %s" %(sbid))
+    ax1.set_xlabel("Time since start of observation (h)")
+    ax1.set_ylabel("Elevation (deg)")
+    ax1.axhline(0, color='g')
+    ax1.axhline(-6, color='blue')
+    ax1.axhline(-12, color='darkblue')
+    ax1.axhline(-18, color='indigo')
+    fig_path = fig_folder + 'solar_el.png'
+    fig.savefig(fig_path)
+    plt.close()
+
+    # Calculate the daylight percent of the observation
+    sun_up_filter = sun_altdeg >= 0
+    steps_sun_up = np.sum(sun_up_filter)
+    pct_daylight = steps_sun_up/len(sun_altdeg)*100
+
+
+    return fig_path, pct_daylight, field_sun_sep_deg
+
+
+def plot_target_elevation(fig_folder, obs_time_utc, duration, field_pos, sbid):
+    obs_end_utc = obs_time_utc + duration
+    tmjd = np.arange(obs_time_utc.mjd, obs_end_utc.mjd, 1./24.0/60.0/6.0)
+    times = Time(tmjd, format='mjd', scale='utc')
+
+    observing_location = get_observing_location()
+
+    field_altaz = field_pos.transform_to(AltAz(obstime=times, location=observing_location))
+    field_altdeg = field_altaz.alt.deg
+
+    fig = plt.figure()
+    ax1 = fig.add_subplot(111)
+    plot, = ax1.plot((tmjd-tmjd[0])*24.0, field_altdeg, marker='None', color="black")
+    ax1.set_title("Target elevation for SBID %s" %(sbid))
+    ax1.set_xlabel("Time since start of observation (h)")
+    ax1.set_ylabel("Elevation (deg)")
+    ax1.axhline(15, color='g')
+    fig_path = fig_folder + 'target_el.png'
+    fig.savefig(fig_path)
+    plt.close()
+
+    return fig_path
+
+
+def report_observation(image, dest_folder, reporter, input_duration, sched_info, obs_metadata):
     print('\nReporting observation based on ' + image)
 
     hdr = fits.getheader(image)
@@ -312,18 +384,20 @@ def report_observation(image, reporter, input_duration, sched_info, obs_metadata
     if project.startswith('AS'):
         proj_link = "https://confluence.csiro.au/display/askapsst/{0}+Data".format(project)
 
-    date = hdr['DATE-OBS']
+    obs_date = hdr['DATE-OBS']  if 'DATE-OBS' in hdr else 'Unknown'
     duration = float(hdr['DURATION'])/3600 if 'DURATION' in hdr else input_duration
 
     naxis1 = int(hdr['NAXIS1'])
     naxis2 = int(hdr['NAXIS2'])
     pixcrd = np.array([[naxis1/2, naxis2/2]])
     centre = w.all_pix2world(pixcrd,1)
-    centre = SkyCoord(ra=centre[0][0], dec=centre[0][1], unit="deg,deg").to_string(style='hmsdms',sep=':')
+    centre_coord = SkyCoord(ra=centre[0][0], dec=centre[0][1], unit="deg,deg")
+    centre = centre_coord.to_string(style='hmsdms',sep=':', precision=1)
 
     # spectral axis
     spectral_unit = 'None'
     spectral_range = ''
+    spec_title = 'Spectral Range'
     for i in range(3,int(hdr['NAXIS'])+1):
         ctype = hdr['CTYPE'+str(i)]
         if (ctype.startswith('VEL') or ctype.startswith('VRAD') or ctype.startswith('FREQ')):
@@ -361,17 +435,41 @@ def report_observation(image, reporter, input_duration, sched_info, obs_metadata
     
     footprint = sched_info.footprint
     if footprint and sched_info.pitch:
-        footprint = "{}_{}".format(footprint, sched_info.pitch)
+        footprint = "{}_{}".format(footprint, sched_info.pitch)        
+
     section = ReportSection('Observation')
     section.add_item('SBID', value=sbid)
     section.add_item('Project', value=project, link=proj_link)
-    section.add_item('Date', value=date)
+    section.add_item('Date (UTC)', value=obs_date)
     section.add_item('Duration<br/>(hours)', value='{:.2f}'.format(duration))
     section.add_item('Field(s)', value=field_names)
     section.add_item('Field Centre(s)', value=field_centres)
     section.add_item('Correlator<br/>Mode', value=sched_info.corr_mode)
     section.add_item('Footprint', value=footprint)
     section.add_item('{}<br/>({})'.format(spec_title, spectral_unit), value=spectral_range)
+
+    if obs_date != 'Unknown':
+        murchison_zone = TimezoneInfo(utc_offset=8*u.hour)
+        obs_time_utc = Time(obs_date, format='isot', scale='utc')
+        local_start = obs_time_utc.to_datetime(timezone=murchison_zone)
+        local_end = (obs_time_utc + duration*u.hour).to_datetime(timezone=murchison_zone)
+        local_time = '{:%Y-%m-%d %H:%M:%S%z}<br/>{:%Y-%m-%d %H:%M:%S%z}'.format(local_start, local_end)
+
+        fig_folder= get_figures_folder(dest_folder)
+        field_pos = SkyCoord(obs_metadata.fields[0].ra, obs_metadata.fields[0].dec, frame=FK5, unit=(u.hourangle, u.deg)) if obs_metadata else centre_coord
+        solr_el_path, pct_daylight, field_sun_sep_deg = plot_solar_elevation(fig_folder, obs_time_utc, duration*u.hour, field_pos, sbid)
+
+        tgt_el_path = plot_target_elevation(fig_folder, obs_time_utc, duration*u.hour, field_pos, sbid)
+
+        section.start_new_row()
+        section.add_item('Local Time', value=local_time)
+        #section.add_item('Solar Elevation', link=solr_el_path_rel, image=solr_el_path_rel) # Second should be a thumbnail
+        add_opt_image_section('Solar Elevation', solr_el_path, fig_folder, dest_folder, section)
+        section.add_item('Daytime Proportion (%)', value="{:.1f}".format(pct_daylight))
+        section.add_item('Solar Separation (deg)', value="{:.3f} to {:.3f}".format(field_sun_sep_deg[0], field_sun_sep_deg[1]))
+        add_opt_image_section('Target Elevation', tgt_el_path, fig_folder, dest_folder, section)
+
+
     reporter.add_section(section)
 
     reporter.project = project
@@ -387,7 +485,7 @@ def report_cube_stats(cube, reporter):
     # Cube information
     askapSoftVer = 'N/A'
     askapPipelineVer = 'N/A'
-    history = hdr['history']
+    history = hdr['history'] if 'history' in hdr else []
     askapSoftVerPrefix = 'Produced with ASKAPsoft version '
     askapPipelinePrefix = 'Processed with ASKAP pipeline version '
     for row in history:
@@ -400,6 +498,10 @@ def report_cube_stats(cube, reporter):
         beam_maj = hdr['BMAJ'] * 60 * 60
         beam_min = hdr['BMIN'] * 60 * 60
         beam = '{:.1f} x {:.1f}'.format(beam_maj, beam_min)
+
+    units = 'N/A'
+    if 'BUNIT' in hdr:
+        units = hdr['BUNIT']
 
     dims = []
     for i in range(1,int(hdr['NAXIS'])+1):
@@ -415,6 +517,7 @@ def report_cube_stats(cube, reporter):
     section.add_item('Synthesised Beam<br/>(arcsec)', value=beam)
     section.add_item('Sky Area<br/>(deg2)', value='')
     section.add_item('Dimensions', value=dimensions)
+    section.add_item('Units', value=units)
     reporter.add_section(section)
     return
 
@@ -569,7 +672,7 @@ def measure_spectral_line_noise(slab, cube, vel_start, vel_end, reporter, dest_f
     # Scale the noise to mJy / 5 kHz channel
     std_data = np.nanstd(slab.unmasked_data[:], axis=0)
     noise_5kHz = std_data / np.sqrt(1 / spec_res_km_s)
-    noise_5kHz = noise_5kHz.to(u.mJy) # Jy => mJy
+    noise_5kHz = noise_5kHz*1000 # Jy => mJy
 
     # Extract the spectral line noise map
     mom0_prefix = build_fname(cube, '_mom0_off')
@@ -581,7 +684,7 @@ def measure_spectral_line_noise(slab, cube, vel_start, vel_end, reporter, dest_f
 
     # Produce the noise plots
     cube_name = os.path.basename(cube)
-    plot_map(folder+prefix, "Spectral axis noise map for " + cube_name, cmap='mako_r', stretch='arcsinh', 
+    plot_map(folder+prefix, "Spectral axis noise map for " + cube_name, cmap='mako', stretch='arcsinh', 
         colorbar_label=r'Noise level per 5 kHz channel (mJy beam$^{-1}$)')
     plot_histogram(folder+prefix, r'Noise level per 5 kHz channel (mJy beam$^{-1}$)', 'Spectral axis noise for ' + cube_name)
     median_noise_5kHz = np.nanmedian(noise_5kHz.value[noise_5kHz.value!=0.0])
@@ -705,7 +808,7 @@ def report_image_stats(image, noise_file, reporter, dest_folder, diagnostics_dir
     #img_flux = np.sum(img_data[~np.isnan(img_data)]) / (1.133*((beam_maj * beam_min) / (img.raPS * img.decPS))) #divide by beam area
 
     # Copy pipleine plots
-    field_src_plot = copy_existing_image(diagnostics_dir+'/image.i.SB*.cont.restored_sources.png', fig_folder)
+    field_src_plot = copy_existing_image(diagnostics_dir+'/image.i.SB*.cont.restored_sources.png', fig_folder) if diagnostics_dir else None
 
     image_name = os.path.basename(image)
     section = ReportSection('Image', image_name)
@@ -728,7 +831,7 @@ def set_velocity_range(emvelstr, nonemvelstr):
         raise ValueError('Velocity {} is not one of the supported GASS velocity steps e.g. 165, 200.'.format(emvel))
     nonemvel = int(nonemvelstr)
     if not nonemvel in vel_steps:
-        raise ValueError('Velocity {} is not one of the supported GASS velocity steps e.g. 165, 200.'.format(emvel))
+        raise ValueError('Velocity {} is not one of the supported GASS velocity steps e.g. 165, 200.'.format(nonemvel))
 
     idx = vel_steps.index(emvel)
     if idx +1 >= len(vel_steps):
@@ -961,9 +1064,12 @@ def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, beam_l
         unit = slab.unit
 
         for j, pos in enumerate(pix_pos_bright):
-            data = slab[:,pos[1], pos[0]]
-            #data = convert_data_to_jy(data, header)
-            spectra_bright[j][i:max_idx] = data.value
+            if 0 <= pos[1] < slab.shape[1] and 0 <= pos[0] < slab.shape[2]:
+                data = slab[:,pos[1], pos[0]]
+                #data = convert_data_to_jy(data, header)
+                spectra_bright[j][i:max_idx] = data.value
+            else:
+                print ("Skipping src {} as y:{} x:{} is outside cube".format(j, pos[1], pos[0]))
         for j, pos in enumerate(pix_pos_beam):
             data = slab[:,pos[1], pos[0]]
             spectra_beam[j][i:max_idx] = data.value
@@ -1056,7 +1162,7 @@ def add_opt_image_section(title, image_path, fig_folder, dest_folder, section, t
         section.add_item(title, value='N/A')
         return
     
-    img_thumb, img_thumb_rel = Diagnostics.make_thumbnail(image_path, fig_folder, dest_folder, size_x=thumb_size_y, 
+    img_thumb, img_thumb_rel = Diagnostics.make_thumbnail(image_path, fig_folder, dest_folder, size_x=thumb_size_x, 
         size_y=thumb_size_y)
     image_path_rel = os.path.relpath(image_path, dest_folder)
     section.add_item(title, link=image_path_rel, image=img_thumb_rel)
@@ -1243,6 +1349,23 @@ def report_self_cal(cube, image, obs_metadata, dest_folder, reporter):
     reporter.add_metric(metric)
 
 
+def log_config(args, dest_folder, figures_folder):
+    print ('Configuration:')
+    print (' {: >20} : {}'.format('cube', args.cube))
+    print (' {: >20} : {}'.format('image', args.image))
+    print (' {: >20} : {}'.format('source_cat', args.source_cat))
+    print (' {: >20} : {}'.format('beam_list', args.beam_list))
+    print (' {: >20} : {}'.format('duration', args.duration))
+    print (' {: >20} : {}'.format('emvel', args.emvel))
+    print (' {: >20} : {}'.format('nonemvel', args.nonemvel))
+    print (' {: >20} : {}'.format('noise', args.noise))
+    print (' {: >20} : {}'.format('redo', args.redo))
+    print (' {: >20} : {}'.format('num_spectra', args.num_spectra))
+    print (' {: >20} : {}'.format('dest_folder', dest_folder))
+    print (' {: >20} : {}'.format('figures_folder', figures_folder))
+    print ('')
+
+
 def main():
     # Parse command line options
     args = parseargs()
@@ -1260,6 +1383,7 @@ def main():
     figures_folder = dest_folder + '/figures'
     if not os.path.exists(figures_folder):
         os.makedirs(figures_folder)
+    log_config(args, dest_folder, figures_folder)
 
     if args.cube and (not os.path.exists(args.cube) or not os.path.isfile(args.cube)):
         raise ValueError('Cube {} could not be found or is not a file.'.format(args.cube))
@@ -1288,7 +1412,7 @@ def main():
     sched_info = Diagnostics.get_sched_info(obs_img)
     diagnostics_dir = Diagnostics.find_diagnostics_dir(args.cube, args.image)
     obs_metadata = Diagnostics.get_metadata(diagnostics_dir) if diagnostics_dir else None
-    sbid = report_observation(obs_img, reporter, args.duration, sched_info, obs_metadata)
+    sbid = report_observation(obs_img, dest_folder, reporter, args.duration, sched_info, obs_metadata)
 
     if args.cube:
         report_cube_stats(args.cube, reporter)
