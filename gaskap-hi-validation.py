@@ -77,6 +77,7 @@ def parseargs():
     parser.add_argument("-n", "--nonemvel", required=False, 
                         help="The low velocity bound of the velocity region where emission is not expected.", default='-100')
 
+    parser.add_argument("--nobane", required=False, help="Should BANE not be used in this run? Default is to run BANE", action='store_true')
     parser.add_argument("-N", "--noise", required=False, help="Use this fits image of the local rms. Default is to run BANE", default=None)
     parser.add_argument("-r", "--redo", help="Rerun all steps, even if intermediate files are present.", default=False,
                         action='store_true')
@@ -97,7 +98,7 @@ def plot_histogram(file_prefix, xlabel, title):
     flat = data.flatten()
     flat = flat[~np.isnan(flat)]
     v =plt.hist(flat, bins=200, bottom=1, log=True, histtype='step')
-    plt.grid()
+    #plt.grid()
     plt.xlabel(xlabel)
     plt.ylabel('Count')
     plt.title(title)
@@ -106,11 +107,14 @@ def plot_histogram(file_prefix, xlabel, title):
     plt.close()
 
     
-def plot_map(file_prefix, title, cmap='magma', stretch='linear', pmax=99.75, colorbar_label=None):
+def plot_map(file_prefix, title, cmap='magma', stretch='linear', pmax=99.75, vmax=None, vmin=0, colorbar_label=None):
     fig = plt.figure(figsize=(5, 4.5))
 
     gc = aplpy.FITSFigure(file_prefix+'.fits', figure=fig)
-    gc.show_colorscale(cmap=cmap, stretch=stretch, pmax=pmax)
+    if vmax is not None:
+        gc.show_colorscale(cmap=cmap, stretch=stretch, vmax=vmax, vmin=vmin)
+    else:    
+        gc.show_colorscale(cmap=cmap, stretch=stretch, pmax=pmax)
     gc.add_colorbar()
     if colorbar_label:
         gc.colorbar.set_axis_label_text(colorbar_label)
@@ -175,7 +179,7 @@ def convert_slab_to_jy(slab, header):
 
     if slab.unmasked_data[0,0,0].unit != u.Jy and slab.unmasked_data[0,0,0].unit != u.Jy/u.beam:
         print ("Converting slab from {} to Jy".format(slab.unmasked_data[0,0,0].unit) )
-        print (slab)
+        #print (slab)
         slab.allow_huge_operations=True
         slab = slab.to(u.Jy, equivalencies=u.brightness_temperature(my_beam, restfreq))
         print (slab)
@@ -205,12 +209,20 @@ def extract_slab(filename, vel_start, vel_end):
     vel_cube = cube.with_spectral_unit(u.m/u.s, velocity_convention='radio')
     cube_vel_min, cube_vel_max = get_vel_limit(vel_cube)
     if vel_start > cube_vel_max or vel_end < cube_vel_min:
+        print ("Cube velocity range is {} to {}".format(cube_vel_min, cube_vel_max))
         return None
 
     slab = vel_cube.spectral_slab(vel_start, vel_end)
     header = fits.getheader(filename)
     slab = convert_slab_to_jy(slab, header)
     return slab
+
+
+def read_cube_vel_limit(filename):
+    cube = SpectralCube.read(filename)
+    vel_cube = cube.with_spectral_unit(u.m/u.s, velocity_convention='radio')
+    cube_vel_min, cube_vel_max = get_vel_limit(vel_cube)
+    return cube_vel_min, cube_vel_max
 
 
 def extract_channel_slab(filename, chan_start, chan_end):
@@ -230,7 +242,7 @@ def build_fname(example_name, suffix):
 def get_figures_folder(dest_folder):
     return dest_folder + '/' + figures_folder + '/'
 
-def get_bane_background(infile, outfile_prefix, plot_title_suffix, ncores=8, redo=False, plot=True):
+def get_bane_background(infile, outfile_prefix, plot_title_suffix, duration, ncores=8, redo=False, plot=True):
     background_prefix = outfile_prefix+'_bkg'
     background_file = background_prefix + '.fits'
     if redo or not os.path.exists(background_file):
@@ -241,7 +253,8 @@ def get_bane_background(infile, outfile_prefix, plot_title_suffix, ncores=8, red
     if plot:
         plot_map(background_prefix, "Large scale emission in " + plot_title_suffix)
         plot_histogram(background_prefix, 'Emission (Jy beam^{-1} km s^{-1})', "Emission for " + plot_title_suffix)
-        plot_map(outfile_prefix+'_rms', "Noise in "+ plot_title_suffix)
+        vmax=25*(math.sqrt(50/duration))
+        plot_map(outfile_prefix+'_rms', "Noise in "+ plot_title_suffix, vmax=vmax)
     
     return background_file
 
@@ -313,7 +326,10 @@ def plot_solar_elevation(fig_folder, obs_time_utc, duration, field_pos, sbid):
     tmjd = np.arange(obs_time_utc.mjd, obs_end_utc.mjd, 1./24.0/60.0/6.0)
     times = Time(tmjd, format='mjd', scale='utc')
 
-    observing_location = get_observing_location()
+    try:
+        observing_location = get_observing_location()
+    except Exception as e:
+        return None, 0, [0, 0]
 
     solar_system_ephemeris.set('builtin')
     sun_sc = get_body("sun", times, location=observing_location)
@@ -353,7 +369,10 @@ def plot_target_elevation(fig_folder, obs_time_utc, duration, field_pos, sbid):
     tmjd = np.arange(obs_time_utc.mjd, obs_end_utc.mjd, 1./24.0/60.0/6.0)
     times = Time(tmjd, format='mjd', scale='utc')
 
-    observing_location = get_observing_location()
+    try:
+        observing_location = get_observing_location()
+    except Exception as e:
+        return None
 
     field_altaz = field_pos.transform_to(AltAz(obstime=times, location=observing_location))
     field_altdeg = field_altaz.alt.deg
@@ -385,7 +404,8 @@ def report_observation(image, dest_folder, reporter, input_duration, sched_info,
         proj_link = "https://confluence.csiro.au/display/askapsst/{0}+Data".format(project)
 
     obs_date = hdr['DATE-OBS']  if 'DATE-OBS' in hdr else 'Unknown'
-    duration = float(hdr['DURATION'])/3600 if 'DURATION' in hdr else input_duration
+    hdr_duration = hdr['DURATION'].strip() if 'DURATION' in hdr else ''
+    duration = float(hdr_duration)/3600 if hdr_duration else input_duration
 
     naxis1 = int(hdr['NAXIS1'])
     naxis2 = int(hdr['NAXIS2'])
@@ -395,6 +415,7 @@ def report_observation(image, dest_folder, reporter, input_duration, sched_info,
     centre = centre_coord.to_string(style='hmsdms',sep=':', precision=1)
 
     # spectral axis
+
     spectral_unit = 'None'
     spectral_range = ''
     spec_title = 'Spectral Range'
@@ -418,6 +439,8 @@ def report_observation(image, dest_folder, reporter, input_duration, sched_info,
                 centre_freq = (float(hdr['CRVAL'+str(i)]) - (step*(float(hdr['CRPIX'+str(i)])-1)))/spectral_conversion 
                 spectral_range = '{:0.3f}'.format(centre_freq)
                 spec_title = 'Centre Freq'
+    cube_vel_min, cube_vel_max = read_cube_vel_limit(image)
+    spectral_range = '{:0.1f} to {:0.1f}'.format(cube_vel_min.to(u.km/u.s), cube_vel_max.to(u.km/u.s))
 
     # Field info
     if obs_metadata:
@@ -473,7 +496,7 @@ def report_observation(image, dest_folder, reporter, input_duration, sched_info,
     reporter.add_section(section)
 
     reporter.project = project
-    return sbid
+    return sbid, duration
 
 
 def report_cube_stats(cube, reporter):
@@ -522,7 +545,7 @@ def report_cube_stats(cube, reporter):
     return
 
 
-def check_for_emission(cube, vel_start, vel_end, reporter, dest_folder, ncores=8, redo=False):
+def check_for_emission(cube, vel_start, vel_end, reporter, dest_folder, duration, ncores=8, redo=False, use_bane=True):
     print ('\nChecking for presence of emission in {:.0f} < v < {:.0f}'.format(vel_start, vel_end))
 
     # Extract a moment 0 map
@@ -546,33 +569,38 @@ def check_for_emission(cube, vel_start, vel_end, reporter, dest_folder, ncores=8
     plot_difference_map(hi_data[0], folder+prefix, "Moment 0 map of " + plot_title_suffix)
 
     # Produce the background plots
-    bkg_data = get_bane_background(mom0_fname, folder+prefix, plot_title_suffix, ncores=ncores, redo=redo)
+    if use_bane:
+        bkg_data = get_bane_background(mom0_fname, folder+prefix, plot_title_suffix, duration, ncores=ncores, redo=redo)
     map_page = folder + '/emission.html'
     rel_map_page = get_figures_folder('.') + '/emission.html'
     output_map_page(map_page, prefix, 'Emission Plots for ' + os.path.basename(cube))
 
-    hi_data = fits.open(folder + prefix+'_bkg.fits')
-    max_em = np.nanmax(hi_data[0].data)
-    max_em_per_kms = max_em / (spec_res_km_s * num_channels)
+    if use_bane:
+        hi_data = fits.open(folder + prefix+'_bkg.fits')
+        max_em = np.nanmax(hi_data[0].data)
+        max_em_per_kms = max_em / (spec_res_km_s * num_channels)
 
     # assess
     cube_name = os.path.basename(cube)
     section = ReportSection('Presence of Emission', cube_name)
     section.add_item('Velocity Range<br/>(km/s LSR)', value='{:.0f} to {:.0f}'.format(vel_start.value, vel_end.value))
     section.add_item('Channels', value='{}'.format(num_channels))
-    section.add_item('Large Scale<br/>Emission Map', link=rel_map_page, image='figures/'+prefix+'_bkg_sml.png')
-    section.add_item('Emission Histogram', link='figures/'+prefix+'_bkg_hist.png', image='figures/'+prefix+'_bkg_hist_sml.png')
-    section.add_item('Max Emission<br/>(Jy beam<sup>-1</sup>)', value='{:.3f}'.format(max_em_per_kms))
+    if use_bane:
+        section.add_item('Large Scale<br/>Emission Map', link=rel_map_page, image='figures/'+prefix+'_bkg_sml.png')
+        section.add_item('Emission Histogram', link='figures/'+prefix+'_bkg_hist.png', image='figures/'+prefix+'_bkg_hist_sml.png')
+        section.add_item('Max Emission<br/>(Jy beam<sup>-1</sup>)', value='{:.3f}'.format(max_em_per_kms))
+
     reporter.add_section(section)
 
-    metric = ValidationMetric('Presence of Emission', 
-        'Maximum large scale emission intensity in the velocity range where emission is expected.',
-        int(max_em_per_kms), assess_metric(max_em_per_kms, 12, 20))
-    reporter.add_metric(metric)
+    if use_bane:
+        metric = ValidationMetric('Presence of Emission', 
+            'Maximum large scale emission intensity in the velocity range where emission is expected.',
+            int(max_em_per_kms), assess_metric(max_em_per_kms, 12, 20))
+        reporter.add_metric(metric)
     return
 
 
-def check_for_non_emission(cube, vel_start, vel_end, reporter, dest_folder, ncores=8, redo=False):
+def check_for_non_emission(cube, vel_start, vel_end, reporter, dest_folder, duration, ncores=8, redo=False, use_bane=True):
     print ('\nChecking for absence of emission in {:.0f} < v < {:.0f}'.format(vel_start, vel_end))
 
     # Extract a moment 0 map
@@ -596,29 +624,34 @@ def check_for_non_emission(cube, vel_start, vel_end, reporter, dest_folder, ncor
     plot_difference_map(hi_data[0], folder+prefix, "Moment 0 map of " + plot_title_suffix)
 
     # Produce the background plots
-    bkg_data = get_bane_background(mom0_fname, folder+prefix, plot_title_suffix, ncores=ncores, redo=redo)
+    if use_bane:
+        bkg_data = get_bane_background(mom0_fname, folder+prefix, plot_title_suffix, duration, ncores=ncores, redo=redo)
+
     map_page = folder + '/off_emission.html'
     rel_map_page = get_figures_folder('.') + '/off_emission.html'
     output_map_page(map_page, prefix, 'Off-line Emission Plots for ' + os.path.basename(cube))
 
-    hi_data = fits.open(folder+prefix+'_bkg.fits')
-    max_em = np.nanmax(hi_data[0].data)
-    max_em_per_kms = max_em / (spec_res_km_s * num_channels)
+    if use_bane:
+        hi_data = fits.open(folder+prefix+'_bkg.fits')
+        max_em = np.nanmax(hi_data[0].data)
+        max_em_per_kms = max_em / (spec_res_km_s * num_channels)
 
     # assess
     cube_name = os.path.basename(cube)
     section = ReportSection('Absence of Off-line Emission', cube_name)
     section.add_item('Velocity Range<br/>(km/s LSR)', value='{:.0f} to {:.0f}'.format(vel_start.value, vel_end.value))
     section.add_item('Channels', value='{}'.format(num_channels))
-    section.add_item('Large Scale<br/>Emission Map', link=rel_map_page, image='figures/'+prefix+'_bkg_sml.png')
-    section.add_item('Emission Histogram', link='figures/'+prefix+'_bkg_hist.png', image='figures/'+prefix+'_bkg_hist_sml.png')
-    section.add_item('Max Emission<br/>(Jy beam<sup>-1</sup>)', value='{:.3f}'.format(max_em_per_kms))
+    if use_bane:
+        section.add_item('Large Scale<br/>Emission Map', link=rel_map_page, image='figures/'+prefix+'_bkg_sml.png')
+        section.add_item('Emission Histogram', link='figures/'+prefix+'_bkg_hist.png', image='figures/'+prefix+'_bkg_hist_sml.png')
+        section.add_item('Max Emission<br/>(Jy beam<sup>-1</sup>)', value='{:.3f}'.format(max_em_per_kms))
     reporter.add_section(section)
 
-    metric = ValidationMetric('Absence of Off-line Emission', 
-        'Maximum large scale emission intensity in the velocity range where emission is not expected.',
-        int(max_em_per_kms), assess_metric(max_em_per_kms, 5, 12, low_good=True))
-    reporter.add_metric(metric)
+    if use_bane:
+        metric = ValidationMetric('Absence of Off-line Emission', 
+            'Maximum large scale emission intensity in the velocity range where emission is not expected.',
+            int(max_em_per_kms), assess_metric(max_em_per_kms, 5, 12, low_good=True))
+        reporter.add_metric(metric)
     return slab
 
 
@@ -684,8 +717,9 @@ def measure_spectral_line_noise(slab, cube, vel_start, vel_end, reporter, dest_f
 
     # Produce the noise plots
     cube_name = os.path.basename(cube)
+    vmax=4.5*(math.sqrt(50/duration))
     plot_map(folder+prefix, "Spectral axis noise map for " + cube_name, cmap='mako', stretch='arcsinh', 
-        colorbar_label=r'Noise level per 5 kHz channel (mJy beam$^{-1}$)')
+        colorbar_label=r'Noise level per 5 kHz channel (mJy beam$^{-1}$)', vmax=vmax, vmin=1.0)
     plot_histogram(folder+prefix, r'Noise level per 5 kHz channel (mJy beam$^{-1}$)', 'Spectral axis noise for ' + cube_name)
     median_noise_5kHz = np.nanmedian(noise_5kHz.value[noise_5kHz.value!=0.0])
 
@@ -698,7 +732,7 @@ def measure_spectral_line_noise(slab, cube, vel_start, vel_end, reporter, dest_f
     section = ReportSection('Spectral Line Noise', cube_name)
     section.add_item('Velocity Range<br/>(km/s LSR)', value='{:.0f} to {:.0f}'.format(vel_start.value, vel_end.value))
     section.add_item('Spectral Axis', value=axis)
-    section.add_item('Spectral Resolution<br/>(kms)', value='{}'.format(round(spec_res_km_s,2)))
+    section.add_item('Spectral Resolution<br/>(km/s)', value='{}'.format(round(spec_res_km_s,2)))
     section.add_item('Spectral Axis<br/>Noise Map', link='figures/'+prefix+'.png', image='figures/'+prefix+'_sml.png')
     section.add_item('Spectral Axis<br/>Noise Histogram', link='figures/'+prefix+'_hist.png', image='figures/'+prefix+'_hist_sml.png')
     section.add_item('Spectral Axis Noise<br/>(mJy per 5 kHz)', value='{:.3f}'.format(median_noise_5kHz))
@@ -875,7 +909,7 @@ def identify_periodicity(spectrum):
     pacf = stattools.pacf(spectrum, nlags=min(50, len(spectrum)//5))
     sd = np.std(pacf[1:])
     significance= pacf/sd
-    indexes = (significance>3).nonzero()[0]
+    indexes = (significance>4).nonzero()[0]
     repeats = indexes[indexes>3]
     return repeats, significance[repeats]
 
@@ -893,7 +927,7 @@ def plot_all_spectra(spectra, names, velocities, em_unit, vel_unit, figures_fold
         ax = fig.add_subplot(num_rows, 3, idx+1)
         ax.plot(velocities, spectrum, linewidth=1)
         ax.set_title(label)
-        ax.grid()
+        #ax.grid()
         if idx > 2*num_rows:
             ax.set_xlabel("$v_{LSRK}$ " + '({})'.format(vel_unit))
         if idx % 3 == 0:
@@ -925,7 +959,7 @@ def plot_overlaid_spectra(spectra, names, velocities, em_unit, vel_unit, figures
         ax.set_xlabel("$v_{LSRK}$ " + '({})'.format(vel_unit))
         ax.set_ylabel(em_unit)
         ax.legend()
-        ax.grid()
+        #ax.grid()
         if len(axes) > 1:
             ax.set_title('Spectra for all beams in interleave {}'.format(chr(ord('A')+idx)))
         else:
@@ -948,7 +982,7 @@ def plot_periodic_spectrum(spectrum, fig, name):
     ax = fig.add_subplot(211)
     ax.plot(spectrum)
     ax.set_title('Spectrum for ' + name)
-    ax.grid()
+    #ax.grid()
 
     ax = fig.add_subplot(212)
     plot_pacf(spectrum, lags=50, ax=ax)
@@ -979,7 +1013,7 @@ def save_spectum(name, velocities, fluxes, ra, dec, spectra_folder):
     writeto(votable, '{}/{}.vot'.format(spectra_folder, name))
 
 
-def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, beam_list, slab_size=40):
+def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, beam_list, duration, vel_range, slab_size=40):
     print('\nExtracting spectra for the {} brightest sources in {} and beams listed in {}'.format(
         num_spectra, source_cat, beam_list))
 
@@ -993,7 +1027,7 @@ def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, beam_l
     bright_srcs = []
     bright_src_pos = []
     if source_cat:
-        votable = parse(source_cat, pedantic=False)
+        votable = parse(source_cat, verify='ignore')
         sources = votable.get_first_table()
         srcs_tab = sources.to_table()
         for key in ('component_name', 'col_component_name'):
@@ -1103,10 +1137,10 @@ def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, beam_l
         beam_names = beams['name']
         spec_res_hz = Spectra.get_spec_resolution(header)
         print ('Spec res (hz) {}'.format(spec_res_hz))
-        theoretical_noise = calc_theoretical_rms(spec_res_hz)
+        theoretical_noise = calc_theoretical_rms(spec_res_hz, t_obs=duration*60*60)
         print ('Theoretical noise (mJy) {}'.format(theoretical_noise))
         plot_overlaid_spectra(spectra_beam, beam_names, velocities, em_unit, 'km/s', figures_folder, os.path.basename(cube), 'beam')
-        Spectra.plot_beam_locs(cube, beams, theoretical_noise, figures_folder+'/beam_comparison', spectra_folder)
+        Spectra.plot_beam_locs(cube, beams, theoretical_noise, figures_folder+'/beam_comparison', spectra_folder, vel_range=vel_range)
         plot_all_spectra(spectra_beam, beam_names, velocities, em_unit, 'km/s', figures_folder, 'beam')
         beam_spectra_file = figures_folder+'/beam_spectra.html'
         output_spectra_page(beam_spectra_file, './beam', "Spectra for centre of each beam")
@@ -1194,7 +1228,10 @@ def report_calibration(diagnostics_dir, dest_folder, reporter):
 
     fig_folder= get_figures_folder(dest_folder)
 
-    bandpass, cal_sbid = Bandpass.get_cal_bandpass(diagnostics_dir)
+    try:
+            bandpass, cal_sbid = Bandpass.get_cal_bandpass(diagnostics_dir)
+    except Exception as e:
+        return
 
     # Plot bandpasses
     bp_by_ant_fig = Bandpass.plot_bandpass_by_antenna(bandpass, cal_sbid, fig_folder, 'Calibration')
@@ -1228,9 +1265,11 @@ def report_diagnostics(diagnostics_dir, sbid, dest_folder, reporter, sched_info,
 
     fig_folder= get_figures_folder(dest_folder)
     is_closepack = sched_info.footprint == None or sched_info.footprint.startswith('closepack')
-
+    
     # Extract metadata
     chan_width, cfreq, nchan = Diagnostics.get_freq_details(diagnostics_dir)
+    if chan_width is None:
+        return
     chan_width_kHz = round(chan_width/1000., 3) # convert Hz to kHz
 
     theoretical_rms_mjy = np.zeros(len(obs_metadata.fields))
@@ -1242,6 +1281,10 @@ def report_diagnostics(diagnostics_dir, sbid, dest_folder, reporter, sched_info,
     # Extract flagging details
     flag_stat_beams, n_flag_ant_beams, ant_flagged_in_all, pct_integ_flagged, baseline_flag_pct, pct_each_integ_flagged, bad_chan_pct_count = Diagnostics.get_flagging_stats(
         diagnostics_dir, fig_folder)
+    if flag_stat_beams is None:
+        print("No flagging data available.")
+        return
+    
     print("Antenna flagged in all:", ant_flagged_in_all)
     flagged_ant_desc = ", ".join(ant_flagged_in_all) if len(ant_flagged_in_all) > 0 else 'None'
     pct_short_base_flagged, pct_medium_base_flagged, pct_long_base_flagged = Diagnostics.calc_flag_percent(
@@ -1322,13 +1365,17 @@ def report_self_cal(cube, image, obs_metadata, dest_folder, reporter):
         field_names += field.name
         folder = Diagnostics.find_subdir(cube, image, field.name)
         if folder:
-            sc = SelfCal.prepare_self_cal_set(folder)
-            plots = SelfCal.plot_self_cal_set(sc, fig_folder)
-            field_plots.append(plots)
-            num_bad_beams, num_bad_ant = SelfCal.calc_phase_stability(sc)
-            print("In field {} found {} bad beams and {} bad antennas".format(field.name, num_bad_beams, num_bad_ant))
-            total_bad_beams += num_bad_beams
-            max_bad_ant = max(max_bad_ant, num_bad_ant)
+            try:
+                sc = SelfCal.prepare_self_cal_set(folder)
+                plots = SelfCal.plot_self_cal_set(sc, fig_folder)
+                field_plots.append(plots)
+                num_bad_beams, num_bad_ant = SelfCal.calc_phase_stability(sc)
+                print("In field {} found {} bad beams and {} bad antennas".format(field.name, num_bad_beams, num_bad_ant))
+                total_bad_beams += num_bad_beams
+                max_bad_ant = max(max_bad_ant, num_bad_ant)
+            except Exception as e:
+                print ("Skipping slef calibration", e)
+                field_plots.append([None, None, None])
         else:
             field_plots.append([None, None, None])
     plot_array = np.asarray(field_plots)
@@ -1412,16 +1459,21 @@ def main():
     sched_info = Diagnostics.get_sched_info(obs_img)
     diagnostics_dir = Diagnostics.find_diagnostics_dir(args.cube, args.image)
     obs_metadata = Diagnostics.get_metadata(diagnostics_dir) if diagnostics_dir else None
-    sbid = report_observation(obs_img, dest_folder, reporter, args.duration, sched_info, obs_metadata)
+    sbid, duration = report_observation(obs_img, dest_folder, reporter, args.duration, sched_info, obs_metadata)
 
     if args.cube:
         report_cube_stats(args.cube, reporter)
 
-        check_for_emission(args.cube, emission_vel_range[0], emission_vel_range[1], reporter, dest_folder, redo=args.redo)
-        slab = check_for_non_emission(args.cube, non_emission_val_range[0], non_emission_val_range[1], reporter, dest_folder, redo=args.redo)
-        measure_spectral_line_noise(slab, args.cube, non_emission_val_range[0], non_emission_val_range[1], reporter, dest_folder, args.duration, redo=args.redo)
+        print(not args.nobane)
+
+        check_for_emission(args.cube, emission_vel_range[0], emission_vel_range[1], reporter, dest_folder, duration, 
+                           redo=args.redo, use_bane=not args.nobane)
+        slab = check_for_non_emission(args.cube, non_emission_val_range[0], non_emission_val_range[1], reporter, 
+                                      dest_folder, duration, redo=args.redo, use_bane=not args.nobane)
+        measure_spectral_line_noise(slab, args.cube, non_emission_val_range[0], non_emission_val_range[1], reporter, 
+                                    dest_folder, duration, redo=args.redo)
         if args.source_cat or args.beam_list:
-            extract_spectra(args.cube, args.source_cat, dest_folder, reporter, args.num_spectra, args.beam_list)
+            extract_spectra(args.cube, args.source_cat, dest_folder, reporter, args.num_spectra, args.beam_list, duration, non_emission_val_range)
 
     if args.image:
         report_image_stats(args.image, args.noise, reporter, dest_folder, diagnostics_dir, redo=args.redo)
