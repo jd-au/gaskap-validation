@@ -10,21 +10,20 @@
 from __future__ import print_function, division
 
 import argparse
-import csv
-import datetime
+#import csv
 import glob
 import math
 import os
-import re
 from string import Template
 import shutil
 import time
+import traceback
 import warnings
 
+import astropy
 import matplotlib
 matplotlib.use('agg')
 
-import aplpy
 from astropy.constants import k_B
 from astropy.coordinates import solar_system_ephemeris, EarthLocation, Angle, SkyCoord, AltAz, FK5, get_body
 from astropy.io import ascii, fits
@@ -52,6 +51,7 @@ vel_steps = [-324, -280, -234, -189, -143, -100, -60, -15, 30, 73, 119, 165, 200
 emission_vel_range=(119,165)*u.km/u.s 
 non_emission_val_range=(-100,-60)*u.km/u.s 
 figures_folder = 'figures'
+work_folder = 'work'
 
 METRIC_BAD = 3
 METRIC_UNCERTAIN = 2
@@ -77,11 +77,14 @@ def parseargs():
     parser.add_argument("-n", "--nonemvel", required=False, 
                         help="The low velocity bound of the velocity region where emission is not expected.", default='-100')
 
-    parser.add_argument("--nobane", required=False, help="Should BANE not be used in this run? Default is to run BANE", action='store_true')
     parser.add_argument("-N", "--noise", required=False, help="Use this fits image of the local rms. Default is to run BANE", default=None)
     parser.add_argument("-r", "--redo", help="Rerun all steps, even if intermediate files are present.", default=False,
                         action='store_true')
     parser.add_argument("--num_spectra", required=False, help="Number of sample spectra to create", type=int, default=15)
+
+    parser.add_argument("--nobane", required=False, help="Should BANE not be used in this run? Default is to run BANE", action='store_true')
+    parser.add_argument("--nodiag", required=False, help="Should the calibration, diagnostics and self-calibration sections not be produced in this run? Default is to run diagnostics.", 
+                        action='store_true')
 
     args = parser.parse_args()
     return args
@@ -93,8 +96,8 @@ def get_str(value):
     return value
 
 
-def plot_histogram(file_prefix, xlabel, title):
-    data = fits.getdata(file_prefix+'.fits')
+def plot_histogram(file_prefix, fits_filename, xlabel, title):
+    data = fits.getdata(fits_filename)
     flat = data.flatten()
     flat = flat[~np.isnan(flat)]
     v =plt.hist(flat, bins=200, bottom=1, log=True, histtype='step')
@@ -106,24 +109,35 @@ def plot_histogram(file_prefix, xlabel, title):
     plt.savefig(file_prefix+'_hist_sml.png', dpi=16, bbox_inches='tight')
     plt.close()
 
-    
-def plot_map(file_prefix, title, cmap='magma', stretch='linear', pmax=99.75, vmax=None, vmin=0, colorbar_label=None):
-    fig = plt.figure(figsize=(5, 4.5))
 
-    gc = aplpy.FITSFigure(file_prefix+'.fits', figure=fig)
-    if vmax is not None:
-        gc.show_colorscale(cmap=cmap, stretch=stretch, vmax=vmax, vmin=vmin)
-    else:    
-        gc.show_colorscale(cmap=cmap, stretch=stretch, pmax=pmax)
-    gc.add_colorbar()
+def plot_map(file_prefix, fits_filename, title, cmap='magma', stretch='linear', pmax=99.75, vmax=None, vmin=0, colorbar_label=None):
+    # Initiate a figure and axis object with WCS projection information
+    hdu = fits.open(fits_filename)[0]
+    wcs = WCS(hdu.header)
+    fig = plt.figure(figsize=(5, 4.5))
+    ax = fig.add_subplot(111, projection=wcs)
+
+    no_nan_data = np.nan_to_num(hdu.data)
+    if vmin is None:
+        vmin=np.percentile(no_nan_data, 0.25)
+    if vmax is None:
+        vmax=np.percentile(no_nan_data, pmax)
+
+    im = ax.imshow(hdu.data, cmap=cmap,vmin=vmin,vmax=vmax, origin='lower')
+    #ax.invert_yaxis() 
+
+    ax.set_xlabel("Right Ascension (degrees)", fontsize=16)
+    ax.set_ylabel("Declination (degrees)", fontsize=16)
+    ax.set_title(title, fontsize=16)
+    ax.grid(color = 'gray', ls = 'dotted', lw = 2)
     if colorbar_label:
-        gc.colorbar.set_axis_label_text(colorbar_label)
-    gc.add_grid()
-    gc.set_title(title)
-    gc.savefig(filename=file_prefix+'.png', dpi=200)
-    gc.savefig(filename=file_prefix+'.pdf', dpi=100)
-    gc.savefig(filename=file_prefix+'_sml.png', dpi=16 )
-    gc.close()
+        cbar = plt.colorbar(im, pad=.07, label=colorbar_label)
+
+    plt.savefig(file_prefix+'.png', dpi=200, bbox_inches='tight')
+    plt.savefig(file_prefix+'.pdf', dpi=100, bbox_inches='tight')
+    plt.savefig(file_prefix+'_sml.png', dpi=16, bbox_inches='tight')
+
+    plt.close()
 
 
 def plot_difference_map(hdu, file_prefix, title, vmin=None, vmax=None):
@@ -242,6 +256,9 @@ def build_fname(example_name, suffix):
 def get_figures_folder(dest_folder):
     return dest_folder + '/' + figures_folder + '/'
 
+def get_work_folder(dest_folder):
+    return dest_folder + '/' + work_folder + '/'
+
 def get_bane_background(infile, outfile_prefix, plot_title_suffix, duration, ncores=8, redo=False, plot=True):
     background_prefix = outfile_prefix+'_bkg'
     background_file = background_prefix + '.fits'
@@ -251,10 +268,10 @@ def get_bane_background(infile, outfile_prefix, plot_title_suffix, duration, nco
         os.system(cmd)
     
     if plot:
-        plot_map(background_prefix, "Large scale emission in " + plot_title_suffix)
-        plot_histogram(background_prefix, 'Emission (Jy beam^{-1} km s^{-1})', "Emission for " + plot_title_suffix)
+        plot_map(background_prefix, background_file, "Large scale emission in " + plot_title_suffix)
+        plot_histogram(background_prefix, background_file, 'Emission (Jy beam^{-1} km s^{-1})', "Emission for " + plot_title_suffix)
         vmax=25*(math.sqrt(50/duration))
-        plot_map(outfile_prefix+'_rms', "Noise in "+ plot_title_suffix, vmax=vmax)
+        plot_map(outfile_prefix+'_rms', outfile_prefix+'_rms.fits', "Noise in "+ plot_title_suffix, vmax=vmax)
     
     return background_file
 
@@ -404,7 +421,7 @@ def report_observation(image, dest_folder, reporter, input_duration, sched_info,
         proj_link = "https://confluence.csiro.au/display/askapsst/{0}+Data".format(project)
 
     obs_date = hdr['DATE-OBS']  if 'DATE-OBS' in hdr else 'Unknown'
-    hdr_duration = hdr['DURATION'].strip() if 'DURATION' in hdr else ''
+    hdr_duration = str(hdr['DURATION']).strip() if 'DURATION' in hdr else ''
     duration = float(hdr_duration)/3600 if hdr_duration else input_duration
 
     naxis1 = int(hdr['NAXIS1'])
@@ -561,7 +578,8 @@ def check_for_emission(cube, vel_start, vel_end, reporter, dest_folder, duration
     mom0 = slab.moment0()
     prefix = build_fname(cube, '_mom0')
     folder = get_figures_folder(dest_folder)
-    mom0_fname = folder + prefix + '.fits'
+    work_folder = get_work_folder(dest_folder)
+    mom0_fname = work_folder + prefix + '.fits'
     mom0.write(mom0_fname, overwrite=True)
 
     hi_data = fits.open(mom0_fname)
@@ -589,6 +607,9 @@ def check_for_emission(cube, vel_start, vel_end, reporter, dest_folder, duration
         section.add_item('Large Scale<br/>Emission Map', link=rel_map_page, image='figures/'+prefix+'_bkg_sml.png')
         section.add_item('Emission Histogram', link='figures/'+prefix+'_bkg_hist.png', image='figures/'+prefix+'_bkg_hist_sml.png')
         section.add_item('Max Emission<br/>(Jy beam<sup>-1</sup>)', value='{:.3f}'.format(max_em_per_kms))
+    else:
+        section.add_item('Moment 0<br/>Map', link=rel_map_page, image='figures/'+prefix+'_sml.png')
+
 
     reporter.add_section(section)
 
@@ -616,7 +637,8 @@ def check_for_non_emission(cube, vel_start, vel_end, reporter, dest_folder, dura
     mom0 = slab.moment0()
     prefix = build_fname(cube, '_mom0_off')
     folder = get_figures_folder(dest_folder)
-    mom0_fname = folder + prefix + '.fits'
+    work_folder = get_work_folder(dest_folder)
+    mom0_fname = work_folder + prefix + '.fits'
     mom0.write(mom0_fname, overwrite=True)
 
     hi_data = fits.open(mom0_fname)
@@ -645,6 +667,8 @@ def check_for_non_emission(cube, vel_start, vel_end, reporter, dest_folder, dura
         section.add_item('Large Scale<br/>Emission Map', link=rel_map_page, image='figures/'+prefix+'_bkg_sml.png')
         section.add_item('Emission Histogram', link='figures/'+prefix+'_bkg_hist.png', image='figures/'+prefix+'_bkg_hist_sml.png')
         section.add_item('Max Emission<br/>(Jy beam<sup>-1</sup>)', value='{:.3f}'.format(max_em_per_kms))
+    else:
+        section.add_item('Moment 0<br/>Map', link=rel_map_page, image='figures/'+prefix+'_sml.png')
     reporter.add_section(section)
 
     if use_bane:
@@ -710,17 +734,18 @@ def measure_spectral_line_noise(slab, cube, vel_start, vel_end, reporter, dest_f
     # Extract the spectral line noise map
     mom0_prefix = build_fname(cube, '_mom0_off')
     folder = get_figures_folder(dest_folder)
-    mom0_fname = folder + mom0_prefix + '.fits'
+    work_folder = get_work_folder(dest_folder)
+    mom0_fname = work_folder + mom0_prefix + '.fits'
     prefix = build_fname(cube, '_spectral_noise')
-    noise_fname = folder + prefix  + '.fits'
+    noise_fname = work_folder + prefix  + '.fits'
     fits.writeto(noise_fname, noise_5kHz.value, fits.getheader(mom0_fname), overwrite=True)
 
     # Produce the noise plots
     cube_name = os.path.basename(cube)
     vmax=4.5*(math.sqrt(50/duration))
-    plot_map(folder+prefix, "Spectral axis noise map for " + cube_name, cmap='mako', stretch='arcsinh', 
+    plot_map(folder+prefix, noise_fname, "Spectral axis noise map for " + cube_name, cmap='mako', stretch='arcsinh', 
         colorbar_label=r'Noise level per 5 kHz channel (mJy beam$^{-1}$)', vmax=vmax, vmin=1.0)
-    plot_histogram(folder+prefix, r'Noise level per 5 kHz channel (mJy beam$^{-1}$)', 'Spectral axis noise for ' + cube_name)
+    plot_histogram(folder+prefix, noise_fname, r'Noise level per 5 kHz channel (mJy beam$^{-1}$)', 'Spectral axis noise for ' + cube_name)
     median_noise_5kHz = np.nanmedian(noise_5kHz.value[noise_5kHz.value!=0.0])
 
     theoretical_gaskap_noise = calc_theoretical_rms(5000, t_obs=duration*60*60) # mJy per 5 kHz for the observation duration
@@ -1223,7 +1248,7 @@ def add_opt_mult_image_section(title, image_paths, fig_folder, dest_folder, sect
         section.add_item(title, value='N/A')
 
 
-def report_calibration(diagnostics_dir, dest_folder, reporter):
+def report_calibration(diagnostics_dir, dest_folder, sched_info, reporter):
     print('\nReporting calibration from ' + diagnostics_dir)
 
     fig_folder= get_figures_folder(dest_folder)
@@ -1231,6 +1256,7 @@ def report_calibration(diagnostics_dir, dest_folder, reporter):
     try:
             bandpass, cal_sbid = Bandpass.get_cal_bandpass(diagnostics_dir)
     except Exception as e:
+        print ("Unable to find calibration bandpass in {}: {}".format(diagnostics_dir, e))
         return
 
     # Plot bandpasses
@@ -1251,6 +1277,7 @@ def report_calibration(diagnostics_dir, dest_folder, reporter):
     # Output the report
     section = ReportSection('Calibration', '')
     section.add_item('Cal SBID', cal_sbid)
+    section.add_item('Cal Source', sched_info.cal_src)
     add_opt_image_section('Bandpass by Antenna', bp_by_ant_fig, fig_folder, dest_folder, section)
     add_opt_image_section('Bandpass by Beam', bp_by_beam_fig, fig_folder, dest_folder, section)
     add_opt_image_section('Amplitude Diagnostics', amp_diag_img, fig_folder, dest_folder, section)
@@ -1364,6 +1391,8 @@ def report_self_cal(cube, image, obs_metadata, dest_folder, reporter):
             field_names += '<br/>'
         field_names += field.name
         folder = Diagnostics.find_subdir(cube, image, field.name)
+        if not folder:
+            folder = Diagnostics.find_subdir(cube, image, "CalibrationTables/"+field.name)
         if folder:
             try:
                 sc = SelfCal.prepare_self_cal_set(folder)
@@ -1374,7 +1403,8 @@ def report_self_cal(cube, image, obs_metadata, dest_folder, reporter):
                 total_bad_beams += num_bad_beams
                 max_bad_ant = max(max_bad_ant, num_bad_ant)
             except Exception as e:
-                print ("Skipping slef calibration", e)
+                print ("Skipping self calibration", e)
+                print(traceback.format_exc())
                 field_plots.append([None, None, None])
         else:
             field_plots.append([None, None, None])
@@ -1396,7 +1426,7 @@ def report_self_cal(cube, image, obs_metadata, dest_folder, reporter):
     reporter.add_metric(metric)
 
 
-def log_config(args, dest_folder, figures_folder):
+def log_config(args, dest_folder, figures_folder, work_folder):
     print ('Configuration:')
     print (' {: >20} : {}'.format('cube', args.cube))
     print (' {: >20} : {}'.format('image', args.image))
@@ -1410,6 +1440,13 @@ def log_config(args, dest_folder, figures_folder):
     print (' {: >20} : {}'.format('num_spectra', args.num_spectra))
     print (' {: >20} : {}'.format('dest_folder', dest_folder))
     print (' {: >20} : {}'.format('figures_folder', figures_folder))
+    print (' {: >20} : {}'.format('work_folder', work_folder))
+    print (' {: >20} : {}'.format('nobane', args.nobane))
+    print (' {: >20} : {}'.format('nodiag', args.nodiag))
+    print ('')
+    print (' {: >20} : {}'.format('numpy', np.__version__))
+    print (' {: >20} : {}'.format('astropy', astropy.__version__))
+    print (' {: >20} : {}'.format('matplotlib', matplotlib.__version__))
     print ('')
 
 
@@ -1430,7 +1467,10 @@ def main():
     figures_folder = dest_folder + '/figures'
     if not os.path.exists(figures_folder):
         os.makedirs(figures_folder)
-    log_config(args, dest_folder, figures_folder)
+    work_folder = dest_folder + '/work'
+    if not os.path.exists(work_folder):
+        os.makedirs(work_folder)
+    log_config(args, dest_folder, figures_folder, work_folder)
 
     if args.cube and (not os.path.exists(args.cube) or not os.path.isfile(args.cube)):
         raise ValueError('Cube {} could not be found or is not a file.'.format(args.cube))
@@ -1464,8 +1504,6 @@ def main():
     if args.cube:
         report_cube_stats(args.cube, reporter)
 
-        print(not args.nobane)
-
         check_for_emission(args.cube, emission_vel_range[0], emission_vel_range[1], reporter, dest_folder, duration, 
                            redo=args.redo, use_bane=not args.nobane)
         slab = check_for_non_emission(args.cube, non_emission_val_range[0], non_emission_val_range[1], reporter, 
@@ -1478,10 +1516,11 @@ def main():
     if args.image:
         report_image_stats(args.image, args.noise, reporter, dest_folder, diagnostics_dir, redo=args.redo)
 
-    if diagnostics_dir:
-        report_calibration(diagnostics_dir, dest_folder, reporter)
+    if diagnostics_dir and not args.nodiag:
+        report_calibration(diagnostics_dir, dest_folder, sched_info, reporter)
         report_diagnostics(diagnostics_dir, sbid, dest_folder, reporter, sched_info, obs_metadata)
-    if obs_metadata:
+
+    if obs_metadata and not args.nodiag:
         report_self_cal(args.cube, args.image, obs_metadata, dest_folder, reporter)
 
     print ('\nProducing report to', dest_folder)

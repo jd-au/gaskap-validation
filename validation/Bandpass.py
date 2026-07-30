@@ -15,7 +15,7 @@ import numpy as np
 import seaborn as sns
 
 def get_cal_bandpass(diagnostics_dir):
-    cal_dir = os.path.abspath(diagnostics_dir+'/../BPCAL')
+    cal_dir = os.path.abspath(diagnostics_dir+'/../CalibrationTables')
     cal_pattern = cal_dir+'/calparameters*bp*smooth'
     paths = glob.glob(cal_pattern)
     if len(paths) == 0:
