@@ -9,6 +9,8 @@ import csv
 import glob
 import os
 import math
+from pathlib import Path
+import time
 
 from astropy.table import Table
 import matplotlib as mpl
@@ -249,6 +251,9 @@ def get_metadata(diagnostics_dir, verbose=False):
                 field_metadata.name = toks[5]
                 field_metadata.ra = toks[6][:-5]
                 field_metadata.dec = toks[7][:-4]
+                if field_metadata.dec.count('.') > 2:
+                    # declination is dot separated (?) replace with colon
+                    field_metadata.dec = field_metadata.dec.replace('.', ':',2)
                 field_metadata.num_rows = int(toks[9])
                 obs_metadata.fields.append(field_metadata)
 
@@ -261,33 +266,37 @@ def get_metadata(diagnostics_dir, verbose=False):
 
 
 def _read_baselines():
-    baselines = Table.read('reference/baselines.csv', format='ascii.csv', names=('index', 'name', 'length'))
+    lib_src_path = Path(os.path.realpath(__file__)).parent
+    ref_dir_path = lib_src_path.parent / 'reference'
+    baselines = Table.read(os.path.join(ref_dir_path, 'baselines.csv'), format='ascii.csv', names=('index', 'name', 'length'))
     return baselines
 
 def _get_flagging_key_values(flagging_file):
     """
     Getting Flagging Key Values. 
     """
-
     with open(flagging_file, 'r') as f:
-        lines = f.readlines()[:6]
+        lines = f.readlines()
     
     N_Rec = 'nRec'  # Total number of spectra feeds into the synthesis image. This is not always constant so grab the value beam-by-beam.
     N_Chan = 'nChan'  # Total number of channel
+    END_SECTION_HEADER = '# Flagging Stats for Integration Number'
 
     # Search for keywords in the file
     
-    for i in range(len(lines)):
-        line = lines[i]
+    for line in lines:
+        #line = lines[i]
         if line.find(N_Rec) >=0:
             tokens = line.split()
             n_Rec = float(tokens[2])
         if line.find(N_Chan) >=0:
             tokens = line.split()
             n_Chan = float(tokens[2])
+        if line.startswith(END_SECTION_HEADER):
+            break
 
     exp_count = n_Rec*35 #counting antenna number from zero based on the recorded data
-    
+
     return n_Rec, n_Chan, exp_count
 
 
@@ -316,7 +325,6 @@ def _get_flagging(flagging_file, flag_ant_file, num_integ, n_chan, baseline_name
     integ_num_inner, integ_flag_inner, integ_num_outer, integ_flag_outer = 0, 0, 0, 0
     integ_baseline_count, integ_baseline_flag = np.zeros((len(baseline_names))), np.zeros((len(baseline_names)))
     num_integ_flagged = 0
-    print ('Processing ', flagging_file)
     with open(flagging_file, 'r') as f:
         for line in f:
             if "#" not in line:  # grep -v "#"
@@ -425,6 +433,7 @@ def get_flagging_stats(diagnostics_dir, fig_folder, verbose=False):
     the list of antennas that are flagged in all beams, the percent of integrations fully flagged, and
     the percent fo each baseline flagged.
     """
+    start = time.time()
     flagging_dir = find_flagging_summary_dir(diagnostics_dir)
     if flagging_dir is None:
         if verbose:
@@ -453,6 +462,7 @@ def get_flagging_stats(diagnostics_dir, fig_folder, verbose=False):
     flag_baseline = np.zeros((len(baselines['name'])))
     unflagged_beam_count = 0
     for ffile in flagging_files:
+        print ('Processing ', ffile)
         n_rec, n_chan, exp_count = _get_flagging_key_values(ffile)
         flag_stat, n_flag_ant, flag_ant_file, flagged_ant, pct_integ_flagged, baseline_flag_pct, per_integ_flag = _get_flagging(
             ffile, flag_ant_file, n_rec, n_chan, baseline_names, bad_chan_pct_count)
@@ -481,10 +491,19 @@ def get_flagging_stats(diagnostics_dir, fig_folder, verbose=False):
 
     pct_integ_flagged = round(np.mean(flag_integ),1)
     pct_baseline_flagged = flag_baseline / unflagged_beam_count
-    pct_each_integ_flagged = np.asarray(total_per_integ_flag) / num_file_per_integ
+
+    pct_each_integ_flagged = []
+    for idx, row in enumerate(total_per_integ_flag):
+        #print ("Total per integration flagging", len(row))
+        pct_each_integ_flagged.append(np.asarray(row) / num_file_per_integ[idx])
+    #pct_each_integ_flagged = np.asarray(total_per_integ_flag) / num_file_per_integ
     #pct_each_integ_flagged = total_per_integ_flag / num_file_per_integ
     print ("Flagged integrations", flag_integ)
-    print ("Pct each integration flaged", pct_each_integ_flagged)
+    print ("Pct each integration flagged", pct_each_integ_flagged)
+
+    end = time.time()
+    print("  ## Finished parsing flagging stats at {}, took {:.2f} s ##".format(
+          time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end)), end-start))
 
     return flag_stat_beams, n_flag_ant_beams, ant_flagged_in_all, pct_integ_flagged, pct_baseline_flagged, pct_each_integ_flagged, bad_chan_pct_count
 
@@ -920,12 +939,13 @@ def get_sched_info(image):
     metadata_dir = find_metadata_dir(None, image)
     if metadata_dir:
         info_files = glob.glob('{}/schedblock-info-*[0-9].txt'.format(metadata_dir))
+        info_files.sort()
         for filename in info_files:
             in_cal = False
             with open(filename, 'r') as f:
                 line_num = 0
                 for line in f:
-                    if line.startswith('==') or line.startswith('--'):
+                    if line.startswith('==') or line.startswith('--') or line.startswith('#'):
                         continue
                     line_num += 1
                     # print (line.strip())
@@ -933,6 +953,9 @@ def get_sched_info(image):
                         parts = line.split(' ')
                         print (parts)
                         if parts[1] == 'bandpass':
+                            in_cal = True
+                            sched_info.calid = parts[0]
+                        elif parts[1].startswith('REF_'):
                             in_cal = True
                             sched_info.calid = parts[0]
                         else:
@@ -945,7 +968,8 @@ def get_sched_info(image):
                         sched_info.footprint = line.split(' = ')[1].strip()
                     if not in_cal and line.startswith('common.target.src%d.footprint.pitch'):
                         sched_info.pitch = line.split(' = ')[1].strip()
-                    if in_cal and line.startswith('common.target.src%d.field_name'):
+                    if in_cal and (line.startswith('common.target.src%d.field_name') or line.startswith('common.target.src1.field_name')):
                         sched_info.cal_src = line.split(' = ')[1].strip()
+                        print ("Cal source", sched_info.cal_src, line)
 
     return sched_info

@@ -33,7 +33,10 @@ class SelfCalSolutions:
         self.field = None
 
     def load(self, base_dir):
-        flist = glob.glob(base_dir + "/cont_gains*tab")
+        self_cal_pat = base_dir + "/calparameters.selfcal*tab"
+        flist = glob.glob(self_cal_pat)
+        if flist == []:
+            raise ValueError("No self calibration tables found at " + self_cal_pat)
         flist.sort()
         filename = flist[0]
         print (filename)
@@ -53,7 +56,7 @@ class SelfCalSolutions:
         self.npol = gain_shape[3]
         self.nant = gain_shape[2]
         tb.close()
-        self.selfcal = np.zeros((self.nsol, 36, self.nant, self.npol), dtype=np.complex)
+        self.selfcal = np.zeros((self.nsol, 36, self.nant, self.npol), dtype=complex)
         self.selfcal_flags = np.zeros((self.nsol, 36, self.nant, self.npol), dtype=np.bool)
         for beam in range(self.nbeam):
             fname = wildcard.replace("??", "%02d" %(beam))
@@ -143,7 +146,7 @@ def _plot_rms_map(sc, field, outFile = None):
     for i, ax in enumerate(axs):
         sns.heatmap(rms[:,:,i].transpose(), ax=ax, cmap='GnBu', square=True, xticklabels=beam_list, yticklabels=ant_list, 
                     vmin=0, vmax=40, linewidths=.5, cbar_kws={"shrink": .9, "label": 'Phase Standard Deviation (deg)'})
-        ax.set_title('Self-cal phase for %s pol %s' % (field, pol[i]))
+        ax.set_title('Self-cal phase for %s %s' % (field, pol[i]))
         ax.set_xlabel(r'Beam')
     axs[0].set_ylabel(r'Antenna')
 

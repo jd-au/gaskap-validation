@@ -3,6 +3,8 @@
 
 # Author James Dempsey
 # Date 23 Nov 2019
+import os
+from pathlib import Path
 
 from astropy.table import Table
 from astropy.io.votable import from_table, writeto
@@ -59,7 +61,8 @@ class ValidationReport(object):
 
 def _output_header(f, reporter):
     f.write('<html>\n<head>\n<title>{}</title>'.format(reporter.title))
-    with open('style.html') as style:
+    src_path = Path(os.path.realpath(__file__)).parent
+    with open(src_path / 'style.html') as style:
         f.write(style.read())
     f.write('\n</head>\n<body>\n<h1 align="middle">{}</h1>'.format(reporter.title))
     return
