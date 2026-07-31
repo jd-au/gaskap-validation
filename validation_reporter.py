@@ -5,6 +5,7 @@
 # Date 23 Nov 2019
 import os
 from pathlib import Path
+import time
 
 from astropy.table import Table
 from astropy.io.votable import from_table, writeto
@@ -45,9 +46,10 @@ class ValidationMetric(object):
 
 
 class ValidationReport(object):
-    def __init__(self, title, metrics_subtitle='GASKAP HI Validation Metrics'):
+    def __init__(self, title, metrics_subtitle='GASKAP HI Validation Metrics', version='??'):
         self.title = title
         self.metrics_subtitle = metrics_subtitle
+        self.version = version
         self.sections = []
         self.metrics = []
         self.project = None
@@ -150,6 +152,10 @@ def _output_section(f, section):
     return
 
 def _output_footer(f, reporter):
+    time_string = time.strftime('%Y-%m-%d %H:%M %z', time.localtime(time.time()))
+    f.write(f'\n<p class="versionFooter">Report produced at {time_string} using '
+            + '<a href="https://github.com/jd-au/gaskap-validation">GASKAP-HI Validation Suite</a> '
+            +f'v{reporter.version} </p>')
     f.write('\n\n</body>\n</html>')
     return
 

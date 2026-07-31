@@ -45,6 +45,7 @@ import seaborn as sns
 from validation import Bandpass, Diagnostics, SelfCal, Spectra
 from validation_reporter import ValidationReport, ReportSection, ReportItem, ValidationMetric, output_html_report, output_metrics_xml
 
+__version__ = "1.2.0"
 
 vel_steps = [-324, -280, -234, -189, -143, -100, -60, -15, 30, 73, 119, 165, 200, 236, 273, 311, 357, 399]
 #emission_vel_range=[] # (165,200)*u.km/u.s
@@ -1494,7 +1495,7 @@ def main():
         obs_img = args.image
         metrics_subtitle = 'ASKAP Observation Diagnostics Metrics'
     cube_name = os.path.basename(obs_img)
-    reporter = ValidationReport('GASKAP Validation Report: {}'.format(cube_name), metrics_subtitle=metrics_subtitle)
+    reporter = ValidationReport('GASKAP Validation Report: {}'.format(cube_name), metrics_subtitle=metrics_subtitle, version=__version__)
 
     sched_info = Diagnostics.get_sched_info(obs_img)
     diagnostics_dir = Diagnostics.find_diagnostics_dir(args.cube, args.image)
