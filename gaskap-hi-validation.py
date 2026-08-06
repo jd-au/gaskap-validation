@@ -10,12 +10,10 @@
 from __future__ import print_function, division
 
 import argparse
-#import csv
 import gc
 import glob
 import math
 import os
-import sys
 from string import Template
 import shutil
 import time
@@ -943,6 +941,8 @@ def set_velocity_range_for_cube(filename):
     non_emission_val_range[1]=non_em_min_vel + vel_width
     print ('\nSet non emission velocity range to {:.0f} < v < {:.0f}'.format(non_emission_val_range[0], non_emission_val_range[1]))
 
+    del hdr
+
 
 def identify_periodicity(spectrum):
     """
@@ -1481,12 +1481,6 @@ def log_config(args, dest_folder, figures_folder, work_folder):
     print (' {: >20} : {}'.format('astropy', astropy.__version__))
     print (' {: >20} : {}'.format('matplotlib', matplotlib.__version__))
     print ('')
-
-def log_memory_usage():
-    #process = psutil.Process(os.getpid())
-    #mem = process.memory_info().rss / 1024 / 1024  # MB
-    #print(f"Current memory usage: {mem:.2f}MB")
-    print(f"Current memory usage: {sys.getallocatedblocks()} blocks")
 
 def main():
     # Parse command line options
