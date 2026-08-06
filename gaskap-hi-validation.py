@@ -10,7 +10,7 @@
 from __future__ import print_function, division
 
 import argparse
-#import csv
+import gc
 import glob
 import math
 import os
@@ -42,7 +42,7 @@ from statsmodels.tsa import stattools
 from statsmodels.graphics.tsaplots import plot_pacf
 import seaborn as sns
 
-from validation import Bandpass, Diagnostics, SelfCal, Spectra
+from validation import Bandpass, Diagnostics, Emission, SelfCal, Spectra
 from validation_reporter import ValidationReport, ReportSection, ReportItem, ValidationMetric, output_html_report, output_metrics_xml
 
 __version__ = "1.2.0"
@@ -76,7 +76,7 @@ def parseargs():
 
     parser.add_argument("-e", "--emvel", required=False, help="The low velocity bound of the velocity region where emission is expected.")
     parser.add_argument("-n", "--nonemvel", required=False, 
-                        help="The low velocity bound of the velocity region where emission is not expected.", default='-100')
+                        help="The low velocity bound of the velocity region where emission is not expected.")
 
     parser.add_argument("-N", "--noise", required=False, help="Use this fits image of the local rms. Default is to run BANE", default=None)
     parser.add_argument("-r", "--redo", help="Rerun all steps, even if intermediate files are present.", default=False,
@@ -237,6 +237,7 @@ def read_cube_vel_limit(filename):
     cube = SpectralCube.read(filename)
     vel_cube = cube.with_spectral_unit(u.m/u.s, velocity_convention='radio')
     cube_vel_min, cube_vel_max = get_vel_limit(vel_cube)
+    del cube, vel_cube
     return cube_vel_min, cube_vel_max
 
 
@@ -244,8 +245,8 @@ def extract_channel_slab(filename, chan_start, chan_end):
     cube = SpectralCube.read(filename)
     vel_cube = cube.with_spectral_unit(u.m/u.s, velocity_convention='radio')
     slab = vel_cube[chan_start:chan_end,:, :].with_spectral_unit(u.km/u.s)
+    del cube
 
-    header = fits.getheader(filename)
     return slab
 
 def build_fname(example_name, suffix):
@@ -372,6 +373,7 @@ def plot_solar_elevation(fig_folder, obs_time_utc, duration, field_pos, sbid):
     fig_path = fig_folder + 'solar_el.png'
     fig.savefig(fig_path)
     plt.close()
+    del fig
 
     # Calculate the daylight percent of the observation
     sun_up_filter = sun_altdeg >= 0
@@ -405,6 +407,7 @@ def plot_target_elevation(fig_folder, obs_time_utc, duration, field_pos, sbid):
     fig_path = fig_folder + 'target_el.png'
     fig.savefig(fig_path)
     plt.close()
+    del fig
 
     return fig_path
 
@@ -514,6 +517,10 @@ def report_observation(image, dest_folder, reporter, input_duration, sched_info,
     reporter.add_section(section)
 
     reporter.project = project
+
+    del hdr
+    del w
+
     return sbid, duration
 
 
@@ -582,6 +589,7 @@ def check_for_emission(cube, vel_start, vel_end, reporter, dest_folder, duration
     work_folder = get_work_folder(dest_folder)
     mom0_fname = work_folder + prefix + '.fits'
     mom0.write(mom0_fname, overwrite=True)
+    del slab
 
     hi_data = fits.open(mom0_fname)
     plot_title_suffix = "emission region in " + os.path.basename(cube)
@@ -740,6 +748,8 @@ def measure_spectral_line_noise(slab, cube, vel_start, vel_end, reporter, dest_f
     prefix = build_fname(cube, '_spectral_noise')
     noise_fname = work_folder + prefix  + '.fits'
     fits.writeto(noise_fname, noise_5kHz.value, fits.getheader(mom0_fname), overwrite=True)
+    del std_data, hdr
+    gc.collect()
 
     # Produce the noise plots
     cube_name = os.path.basename(cube)
@@ -887,29 +897,51 @@ def report_image_stats(image, noise_file, reporter, dest_folder, diagnostics_dir
 
 def set_velocity_range(emvelstr, nonemvelstr):
     emvel = int(emvelstr)
-    if not emvel in vel_steps:
-        raise ValueError('Velocity {} is not one of the supported GASS velocity steps e.g. 165, 200.'.format(emvel))
     nonemvel = int(nonemvelstr)
-    if not nonemvel in vel_steps:
-        raise ValueError('Velocity {} is not one of the supported GASS velocity steps e.g. 165, 200.'.format(nonemvel))
 
-    idx = vel_steps.index(emvel)
-    if idx +1 >= len(vel_steps):
-        raise ValueError('Velocity {} is not one of the supported GASS velocity steps e.g. 165, 200.'.format(emvel))
+    vel_width=90*u.km/u.s
 
     # emission_vel_range=(vel_steps[idx],vel_steps[idx+1])*u.km/u.s
-    emission_vel_range[0]=vel_steps[idx]*u.km/u.s
-    emission_vel_range[1]=vel_steps[idx+1]*u.km/u.s
+    emission_vel_range[0]=emvel*u.km/u.s
+    emission_vel_range[1]=emvel*u.km/u.s + vel_width
     print ('\nSet emission velocity range to {:.0f} < v < {:.0f}'.format(emission_vel_range[0], emission_vel_range[1]))
 
-    idx = vel_steps.index(nonemvel)
-    if idx +1 >= len(vel_steps):
-        raise ValueError('Velocity {} is not one of the supported GASS velocity steps e.g. 165, 200.'.format(emvel))
-
     # emission_vel_range=(vel_steps[idx],vel_steps[idx+1])*u.km/u.s
-    non_emission_val_range[0]=vel_steps[idx]*u.km/u.s
-    non_emission_val_range[1]=vel_steps[idx+1]*u.km/u.s
+    non_emission_val_range[0]=nonemvel*u.km/u.s
+    non_emission_val_range[1]=nonemvel*u.km/u.s + vel_width
     print ('\nSet non emission velocity range to {:.0f} < v < {:.0f}'.format(non_emission_val_range[0], non_emission_val_range[1]))
+
+
+def set_velocity_range_for_cube(filename):
+    cube = SpectralCube.read(filename)
+    vel_cube = cube.with_spectral_unit(u.m/u.s, velocity_convention='radio')
+    cube_vel_min, cube_vel_max = get_vel_limit(vel_cube)
+    del vel_cube
+    del cube
+
+    hdr = fits.getheader(filename)
+    w_cel = WCS(hdr).celestial
+
+    naxis1 = int(hdr['NAXIS1'])
+    naxis2 = int(hdr['NAXIS2'])
+    pixcrd = np.array([[naxis1/2, naxis2/2]])
+    centre = w_cel.all_pix2world(pixcrd,1)
+    centre_coord = SkyCoord(ra=centre[0][0], dec=centre[0][1], unit="deg,deg")
+
+    em_min_vel = Emission.find_em_velocity_range(centre_coord.galactic.b.degree, centre_coord.galactic.l.degree)
+    non_em_min_vel = Emission.find_non_em_velocity_range(cube_vel_min, cube_vel_max, em_min_vel)
+
+    vel_width=90*u.km/u.s
+
+    emission_vel_range[0]=em_min_vel
+    emission_vel_range[1]=em_min_vel + vel_width
+    print ('\nSet emission velocity range to {:.0f} < v < {:.0f}'.format(emission_vel_range[0], emission_vel_range[1]))
+
+    non_emission_val_range[0]=non_em_min_vel
+    non_emission_val_range[1]=non_em_min_vel + vel_width
+    print ('\nSet non emission velocity range to {:.0f} < v < {:.0f}'.format(non_emission_val_range[0], non_emission_val_range[1]))
+
+    del hdr
 
 
 def identify_periodicity(spectrum):
@@ -1450,7 +1482,6 @@ def log_config(args, dest_folder, figures_folder, work_folder):
     print (' {: >20} : {}'.format('matplotlib', matplotlib.__version__))
     print ('')
 
-
 def main():
     # Parse command line options
     args = parseargs()
@@ -1485,6 +1516,9 @@ def main():
 
     if args.emvel:
         set_velocity_range(args.emvel, args.nonemvel)
+    elif args.cube:
+        # choose velocities based on the field location
+        set_velocity_range_for_cube(args.cube)
 
     if args.cube:
         print ('\nChecking quality level of GASKAP HI cube:', args.cube)
@@ -1501,16 +1535,20 @@ def main():
     diagnostics_dir = Diagnostics.find_diagnostics_dir(args.cube, args.image)
     obs_metadata = Diagnostics.get_metadata(diagnostics_dir) if diagnostics_dir else None
     sbid, duration = report_observation(obs_img, dest_folder, reporter, args.duration, sched_info, obs_metadata)
+    gc.collect()
 
     if args.cube:
         report_cube_stats(args.cube, reporter)
 
         check_for_emission(args.cube, emission_vel_range[0], emission_vel_range[1], reporter, dest_folder, duration, 
                            redo=args.redo, use_bane=not args.nobane)
+        gc.collect()
         slab = check_for_non_emission(args.cube, non_emission_val_range[0], non_emission_val_range[1], reporter, 
                                       dest_folder, duration, redo=args.redo, use_bane=not args.nobane)
+        gc.collect()
         measure_spectral_line_noise(slab, args.cube, non_emission_val_range[0], non_emission_val_range[1], reporter, 
                                     dest_folder, duration, redo=args.redo)
+        gc.collect()
         if args.source_cat or args.beam_list:
             extract_spectra(args.cube, args.source_cat, dest_folder, reporter, args.num_spectra, args.beam_list, duration, non_emission_val_range)
 
