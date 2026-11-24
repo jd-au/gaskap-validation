@@ -45,7 +45,7 @@ import seaborn as sns
 from validation import Bandpass, Diagnostics, Emission, SelfCal, Spectra
 from validation_reporter import ValidationReport, ReportSection, ReportItem, ValidationMetric, output_html_report, output_metrics_xml
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 vel_steps = [-324, -280, -234, -189, -143, -100, -60, -15, 30, 73, 119, 165, 200, 236, 273, 311, 357, 399]
 #emission_vel_range=[] # (165,200)*u.km/u.s
@@ -86,6 +86,7 @@ def parseargs():
     parser.add_argument("--nobane", required=False, help="Should BANE not be used in this run? Default is to run BANE", action='store_true')
     parser.add_argument("--nodiag", required=False, help="Should the calibration, diagnostics and self-calibration sections not be produced in this run? Default is to run diagnostics.", 
                         action='store_true')
+    parser.add_argument("--cleanwork", required=False, help="Should the work folder be cleaned after running? Default is not to clean.", action='store_true')
 
     args = parser.parse_args()
     return args
@@ -115,16 +116,20 @@ def plot_map(file_prefix, fits_filename, title, cmap='magma', stretch='linear', 
     # Initiate a figure and axis object with WCS projection information
     hdu = fits.open(fits_filename)[0]
     wcs = WCS(hdu.header)
-    fig = plt.figure(figsize=(5, 4.5))
-    ax = fig.add_subplot(111, projection=wcs)
+    fig = plt.figure(figsize=(18, 12))
+    ax = fig.add_subplot(111, projection=wcs.celestial)
 
     no_nan_data = np.nan_to_num(hdu.data)
     if vmin is None:
         vmin=np.percentile(no_nan_data, 0.25)
     if vmax is None:
         vmax=np.percentile(no_nan_data, pmax)
+    mapdata = hdu.data
+    while len(mapdata.shape) > 2:
+        print ("Map data has shape {}, reducing to 2D".format(mapdata.shape))
+        mapdata = mapdata[0]
 
-    im = ax.imshow(hdu.data, cmap=cmap,vmin=vmin,vmax=vmax, origin='lower')
+    im = ax.imshow(mapdata, cmap=cmap,vmin=vmin,vmax=vmax, origin='lower')
     #ax.invert_yaxis() 
 
     ax.set_xlabel("Right Ascension (degrees)", fontsize=16)
@@ -181,6 +186,7 @@ def output_map_page(filename, file_prefix, title):
         output_plot(mp, 'Large Scale Emission Map', file_prefix + '_bkg.png')
         output_plot(mp, 'Noise Map', file_prefix + '_rms.png')
         output_plot(mp, 'Moment 0 Map', file_prefix + '.png')
+        output_plot(mp, 'Peak Intensity Map', file_prefix + '_peak.png')
         mp.write('\n</body>\n</html>\n')
 
 
@@ -192,11 +198,18 @@ def convert_slab_to_jy(slab, header):
     elif 'RESTFRQ' in header.keys():
         restfreq = header['RESTFRQ']*u.Hz
 
-    if slab.unmasked_data[0,0,0].unit != u.Jy and slab.unmasked_data[0,0,0].unit != u.Jy/u.beam:
-        print ("Converting slab from {} to Jy".format(slab.unmasked_data[0,0,0].unit) )
+    if slab.unmasked_data[0,0,0].unit == u.Jy/u.arcsec**2:
+        print ("Converting slab from {} to Jy using beam {}".format(slab.unmasked_data[0,0,0].unit, my_beam))
+        print ("beam major = {}, beam minor = {}".format(my_beam.major.to(u.arcsec), my_beam.minor.to(u.arcsec)))
+        #exit(1)
+        slab.allow_huge_operations=True
+        slab = slab*1.1331*my_beam.major.to(u.arcsec)*my_beam.minor.to(u.arcsec)
+        print (slab)
+    elif slab.unmasked_data[0,0,0].unit != u.Jy and slab.unmasked_data[0,0,0].unit != u.Jy/u.beam:
+        print ("Converting slab from {} to Jy/beam".format(slab.unmasked_data[0,0,0].unit) )
         #print (slab)
         slab.allow_huge_operations=True
-        slab = slab.to(u.Jy, equivalencies=u.brightness_temperature(my_beam, restfreq))
+        slab = slab.to(u.Jy, equivalencies=u.brightness_temperature(restfreq, beam_area=my_beam))
         print (slab)
     return slab
 
@@ -209,10 +222,13 @@ def convert_data_to_jy(data, header, verbose=False):
     elif 'RESTFRQ' in header.keys():
         restfreq = header['RESTFRQ']*u.Hz
 
-    if data[0].unit != u.Jy:
+    if data[0].unit == u.Jy/u.arcsec**2:
+        if verbose:
+            print ("Not converting data from {} to Jy".format(data[0].unit) )
+    elif data[0].unit != u.Jy:
         if verbose:
             print ("Converting data from {} to Jy".format(data[0].unit) )
-        data = data.to(u.Jy, equivalencies=u.brightness_temperature(my_beam, restfreq))
+        data = data.to(u.Jy, equivalencies=u.brightness_temperature(restfreq, beam_area=my_beam))
     return data
 
 def get_vel_limit(vel_cube):
@@ -570,7 +586,7 @@ def report_cube_stats(cube, reporter):
     return
 
 
-def check_for_emission(cube, vel_start, vel_end, reporter, dest_folder, duration, ncores=8, redo=False, use_bane=True):
+def check_for_emission(cube, vel_start, vel_end, reporter, dest_folder, duration, ncores=8, redo=False, use_bane=True, noise=None):
     print ('\nChecking for presence of emission in {:.0f} < v < {:.0f}'.format(vel_start, vel_end))
 
     # Extract a moment 0 map
@@ -583,18 +599,35 @@ def check_for_emission(cube, vel_start, vel_end, reporter, dest_folder, duration
     hdr = fits.getheader(cube)
     spec_res_km_s = calc_velocity_res(hdr)
 
+    # Plot the moment map
     mom0 = slab.moment0()
     prefix = build_fname(cube, '_mom0')
     folder = get_figures_folder(dest_folder)
     work_folder = get_work_folder(dest_folder)
     mom0_fname = work_folder + prefix + '.fits'
     mom0.write(mom0_fname, overwrite=True)
-    del slab
 
     hi_data = fits.open(mom0_fname)
     plot_title_suffix = "emission region in " + os.path.basename(cube)
     plot_difference_map(hi_data[0], folder+prefix, "Moment 0 map of " + plot_title_suffix)
 
+    # Plot the peak map
+    peak_emission = np.zeros_like(slab[0])
+    for plane in slab:
+        peak_emission = np.maximum(peak_emission, plane)
+    #peak_prefix = build_fname(cube, '_peak')
+    peak_prefix = prefix + '_peak'
+    peak_fname = work_folder + peak_prefix + '.fits'
+    peak_emission.write(peak_fname, overwrite=True)
+    del slab
+
+    plot_map(folder+peak_prefix, peak_fname, "Peak intensity map of " + plot_title_suffix, 
+             colorbar_label='Peak Emission (Jy beam^{-1})')
+
+    if noise is not None:
+        plot_map(folder+prefix+'_rms', noise, os.path.basename(noise), 
+                 colorbar_label='Noise (Jy beam^{-1})')
+        
     # Produce the background plots
     if use_bane:
         bkg_data = get_bane_background(mom0_fname, folder+prefix, plot_title_suffix, duration, ncores=ncores, redo=redo)
@@ -643,6 +676,7 @@ def check_for_non_emission(cube, vel_start, vel_end, reporter, dest_folder, dura
     hdr = fits.getheader(cube)
     spec_res_km_s = calc_velocity_res(hdr)
 
+    # Plot the moment map
     mom0 = slab.moment0()
     prefix = build_fname(cube, '_mom0_off')
     folder = get_figures_folder(dest_folder)
@@ -653,6 +687,18 @@ def check_for_non_emission(cube, vel_start, vel_end, reporter, dest_folder, dura
     hi_data = fits.open(mom0_fname)
     plot_title_suffix = "non-emission region in " + os.path.basename(cube)
     plot_difference_map(hi_data[0], folder+prefix, "Moment 0 map of " + plot_title_suffix)
+
+    # Plot the peak map
+    peak_emission = np.zeros_like(slab[0])
+    for plane in slab:
+        peak_emission = np.maximum(peak_emission, plane)
+    #peak_prefix = build_fname(cube, '_peak')
+    peak_prefix = prefix + '_peak'
+    peak_fname = work_folder + peak_prefix + '.fits'
+    peak_emission.write(peak_fname, overwrite=True)
+
+    plot_map(folder+peak_prefix, peak_fname, "Peak intensity map of " + plot_title_suffix, 
+             colorbar_label='Peak Emission (Jy beam^{-1})')
 
     # Produce the background plots
     if use_bane:
@@ -678,6 +724,7 @@ def check_for_non_emission(cube, vel_start, vel_end, reporter, dest_folder, dura
         section.add_item('Max Emission<br/>(Jy beam<sup>-1</sup>)', value='{:.3f}'.format(max_em_per_kms))
     else:
         section.add_item('Moment 0<br/>Map', link=rel_map_page, image='figures/'+prefix+'_sml.png')
+
     reporter.add_section(section)
 
     if use_bane:
@@ -979,6 +1026,7 @@ def plot_all_spectra(spectra, names, velocities, em_unit, vel_unit, figures_fold
     else:
         fig = plt.figure(figsize=(18, 12))
     num_rows = math.ceil(len(spectra)/3)
+    sns.set_theme()
     for idx, spectrum in enumerate(spectra):
         label = get_str(names[idx])
 
@@ -997,6 +1045,7 @@ def plot_all_spectra(spectra, names, velocities, em_unit, vel_unit, figures_fold
 
 def plot_overlaid_spectra(spectra, names, velocities, em_unit, vel_unit, figures_folder, cube_name, prefix):
     fig = plt.figure(figsize=(18, 12))
+    sns.set_theme()
     axes = []
     if len(spectra) > 36:
         for i in range(1,4):
@@ -1476,10 +1525,12 @@ def log_config(args, dest_folder, figures_folder, work_folder):
     print (' {: >20} : {}'.format('work_folder', work_folder))
     print (' {: >20} : {}'.format('nobane', args.nobane))
     print (' {: >20} : {}'.format('nodiag', args.nodiag))
+    print (' {: >20} : {}'.format('cleanwork', args.cleanwork))
     print ('')
     print (' {: >20} : {}'.format('numpy', np.__version__))
     print (' {: >20} : {}'.format('astropy', astropy.__version__))
     print (' {: >20} : {}'.format('matplotlib', matplotlib.__version__))
+    print (' {: >20} : {}'.format('gaskap_hi_validation', __version__))
     print ('')
 
 def main():
@@ -1532,7 +1583,8 @@ def main():
     reporter = ValidationReport('GASKAP Validation Report: {}'.format(cube_name), metrics_subtitle=metrics_subtitle, version=__version__)
 
     sched_info = Diagnostics.get_sched_info(obs_img)
-    diagnostics_dir = Diagnostics.find_diagnostics_dir(args.cube, args.image)
+    diagnostics_dir = Diagnostics.find_diagnostics_dir(args.cube, args.image) if not args.nodiag else None
+    print(diagnostics_dir)
     obs_metadata = Diagnostics.get_metadata(diagnostics_dir) if diagnostics_dir else None
     sbid, duration = report_observation(obs_img, dest_folder, reporter, args.duration, sched_info, obs_metadata)
     gc.collect()
@@ -1541,7 +1593,7 @@ def main():
         report_cube_stats(args.cube, reporter)
 
         check_for_emission(args.cube, emission_vel_range[0], emission_vel_range[1], reporter, dest_folder, duration, 
-                           redo=args.redo, use_bane=not args.nobane)
+                           redo=args.redo, use_bane=not args.nobane, noise=args.noise)
         gc.collect()
         slab = check_for_non_emission(args.cube, non_emission_val_range[0], non_emission_val_range[1], reporter, 
                                       dest_folder, duration, redo=args.redo, use_bane=not args.nobane)
@@ -1565,6 +1617,10 @@ def main():
     print ('\nProducing report to', dest_folder)
     output_html_report(reporter, dest_folder)
     output_metrics_xml(reporter, dest_folder)
+
+    if args.cleanwork:
+        print ('\nCleaning up temporary files in', work_folder)
+        shutil.rmtree(work_folder)
 
     end = time.time()
     print("#### Completed validation at {} ####".format(
