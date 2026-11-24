@@ -67,8 +67,9 @@ class SelfCalSolutions:
             sc_vals = tb.getcol("GAIN", 1, self.nsol)
             flag_vals = tb.getcol("GAIN_VALID", 1, self.nsol)
             for index in range(self.nsol):
-                self.selfcal[index, beam] = sc_vals[index, 0, :, :]
-                self.selfcal_flags[index, beam] = np.invert(flag_vals[index, 0, :, :])
+                if index < sc_vals.shape[0]:
+                    self.selfcal[index, beam] = sc_vals[index, 0, :, :]
+                    self.selfcal_flags[index, beam] = np.invert(flag_vals[index, 0, :, :])
         self.selfcal[np.where(self.selfcal_flags)] = np.nan
         self.field = os.path.basename(base_dir)
         print("Read %d solutions, %d antennas, %d beams, %d polarisations" %(self.nsol, self.nant, self.nbeam, self.npol))
