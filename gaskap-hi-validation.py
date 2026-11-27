@@ -45,7 +45,7 @@ import seaborn as sns
 from validation import Bandpass, Diagnostics, Emission, SelfCal, Spectra
 from validation_reporter import ValidationReport, ReportSection, ReportItem, ValidationMetric, output_html_report, output_metrics_xml
 
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 
 vel_steps = [-324, -280, -234, -189, -143, -100, -60, -15, 30, 73, 119, 165, 200, 236, 273, 311, 357, 399]
 #emission_vel_range=[] # (165,200)*u.km/u.s
@@ -631,8 +631,8 @@ def check_for_emission(cube, vel_start, vel_end, reporter, dest_folder, duration
     # Produce the background plots
     if use_bane:
         bkg_data = get_bane_background(mom0_fname, folder+prefix, plot_title_suffix, duration, ncores=ncores, redo=redo)
-    map_page = folder + '/emission.html'
-    rel_map_page = get_figures_folder('.') + '/emission.html'
+    map_page = folder + 'emission.html'
+    rel_map_page = get_figures_folder('.') + 'emission.html'
     output_map_page(map_page, prefix, 'Emission Plots for ' + os.path.basename(cube))
 
     if use_bane:
@@ -704,8 +704,8 @@ def check_for_non_emission(cube, vel_start, vel_end, reporter, dest_folder, dura
     if use_bane:
         bkg_data = get_bane_background(mom0_fname, folder+prefix, plot_title_suffix, duration, ncores=ncores, redo=redo)
 
-    map_page = folder + '/off_emission.html'
-    rel_map_page = get_figures_folder('.') + '/off_emission.html'
+    map_page = folder + 'off_emission.html'
+    rel_map_page = get_figures_folder('.') + 'off_emission.html'
     output_map_page(map_page, prefix, 'Off-line Emission Plots for ' + os.path.basename(cube))
 
     if use_bane:
@@ -1128,7 +1128,7 @@ def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, beam_l
     spectra_folder = dest_folder + '/spectra'
     if not os.path.exists(spectra_folder):
         os.makedirs(spectra_folder)
-    figures_folder = dest_folder + '/figures'
+    figures_folder = get_figures_folder(dest_folder)
 
     # Read the source list and identify the brightest sources
     bright_srcs = []
@@ -1238,7 +1238,7 @@ def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, beam_l
     velocities = vel_cube.spectral_axis.to(u.km/u.s)
     plot_overlaid_spectra(spectra_bright, names, velocities, em_unit, 'km/s', figures_folder, os.path.basename(cube), 'bright')
     plot_all_spectra(spectra_bright, names, velocities, em_unit, 'km/s', figures_folder, 'bright')
-    bright_spectra_file = figures_folder+'/bright_spectra.html'
+    bright_spectra_file = figures_folder+'bright_spectra.html'
     output_spectra_page(bright_spectra_file, './bright', "Spectra for 15 Brightest Sources")
     if beam_list:
         beam_names = beams['name']
@@ -1247,9 +1247,9 @@ def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, beam_l
         theoretical_noise = calc_theoretical_rms(spec_res_hz, t_obs=duration*60*60)
         print ('Theoretical noise (mJy) {}'.format(theoretical_noise))
         plot_overlaid_spectra(spectra_beam, beam_names, velocities, em_unit, 'km/s', figures_folder, os.path.basename(cube), 'beam')
-        Spectra.plot_beam_locs(cube, beams, theoretical_noise, figures_folder+'/beam_comparison', spectra_folder, vel_range=vel_range)
+        Spectra.plot_beam_locs(cube, beams, theoretical_noise, figures_folder+'beam_comparison', spectra_folder, vel_range=vel_range)
         plot_all_spectra(spectra_beam, beam_names, velocities, em_unit, 'km/s', figures_folder, 'beam')
-        beam_spectra_file = figures_folder+'/beam_spectra.html'
+        beam_spectra_file = figures_folder+'beam_spectra.html'
         output_spectra_page(beam_spectra_file, './beam', "Spectra for centre of each beam")
     
     # Check for periodicity in the spectra
@@ -1265,11 +1265,11 @@ def extract_spectra(cube, source_cat, dest_folder, reporter, num_spectra, beam_l
                 bright_periodic.append(name)
                 fig = plt.figure(figsize=(8, 6))
                 plot_periodic_spectrum(spec, fig, name)
-                fig.savefig(figures_folder+'/{}_periodicity.png'.format(name))
+                fig.savefig(figures_folder+'{}_periodicity.png'.format(name))
                 detections.append("Detected periodicity with lag {} of significance {}".format(repeats, sig))
                 print ("Spectrum for {} has periodicity with lag {} of signficance {}".format(name, repeats, sig))
     bright_periodic_str = 'None' if len(bright_periodic) == 0 else '<br/>'.join(bright_periodic)
-    output_periodic_spectra_page(figures_folder+'/periodic_spectra.html', './', "Spectra with Periodic Features", bright_periodic, detections)
+    output_periodic_spectra_page(figures_folder+'periodic_spectra.html', './', "Spectra with Periodic Features", bright_periodic, detections)
 
     # Output the report
     cube_name = os.path.basename(cube)
